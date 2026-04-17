@@ -257,48 +257,6 @@ app.all('/api/integrations/:name/:endpoint', async (c) => {
 })
 
 // ---------------------------------------------------------------------------
-// Platform API proxy (single-segment endpoints like my-email-address,
-// send-user-email, claim-email-handle). These are served by the api-worker
-// at /api/integrations/{name} — the old SDK called them via mcapi.
-// ---------------------------------------------------------------------------
-
-app.all('/api/integrations/:name', async (c) => {
-  console.log(`[worker] platform API proxy: ${c.req.method} /api/integrations/${c.req.param('name')}`)
-  const auth = await resolveAuth(c.req.raw, c.env)
-  if (!auth) {
-    console.log('[worker] platform API proxy: no auth, returning 401')
-    return c.json({ error: 'Unauthorized' }, 401)
-  }
-  console.log(`[worker] platform API proxy: authed as ${auth.userId}`)
-
-  const target = `/api/integrations/${c.req.param('name')}`
-  const token = c.req.header('Authorization')?.slice(7)
-
-  const headers: Record<string, string> = {
-    'Content-Type': c.req.header('Content-Type') ?? 'application/json',
-  }
-  if (token) headers['Authorization'] = `Bearer ${token}`
-
-  const hasBody = c.req.method !== 'GET' && c.req.method !== 'HEAD'
-  const body = hasBody ? await c.req.text() : undefined
-
-  try {
-    console.log(`[worker] platform API proxy: forwarding to apiWorkerFetch ${target}`)
-    const res = await apiWorkerFetch(c.env, target, {
-      method: c.req.method,
-      headers,
-      body,
-    })
-    const resBody = await res.text()
-    console.log(`[worker] platform API proxy: response ${res.status} body=${resBody.slice(0, 200)}`)
-    return new Response(resBody, { status: res.status, headers: res.headers })
-  } catch (err) {
-    console.error('[worker] platform API proxy error:', err)
-    return c.json({ error: 'Platform API proxy failed' }, 502)
-  }
-})
-
-// ---------------------------------------------------------------------------
 // WebSocket routes
 // ---------------------------------------------------------------------------
 
@@ -329,7 +287,23 @@ function wsRoute(
   }
 }
 
-app.get('/ws/:roomId', wsRoute((env) => env.RECORD_ROOMS))
+// Global scopes (workspace:*, dir:*, conv:*) live in the platform worker's
+// shared RecordRoom DOs — proxy WebSocket upgrades there so all apps share
+// the same data. App-local scopes (app:*) stay in our own DOs.
+// In local dev PLATFORM_WORKER isn't bound, so fall back to the local DO.
+const GLOBAL_SCOPE_PREFIXES = ['workspace:', 'dir:', 'conv:']
+
+app.get('/ws/:roomId', (c) => {
+  const roomId = c.req.param('roomId')
+  if (
+    GLOBAL_SCOPE_PREFIXES.some(p => roomId.startsWith(p)) &&
+    c.env.PLATFORM_WORKER &&
+    typeof c.env.PLATFORM_WORKER.fetch === 'function'
+  ) {
+    return c.env.PLATFORM_WORKER.fetch(c.req.raw)
+  }
+  return wsRoute((env) => env.RECORD_ROOMS)(c)
+})
 
 app.get('/ws/yjs/:docId', wsRoute((env) => env.YJS_ROOMS, () => ({ role: 'member' })))
 

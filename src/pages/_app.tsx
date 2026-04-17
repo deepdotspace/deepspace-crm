@@ -9,6 +9,7 @@ import { Suspense, type ReactNode } from 'react'
 import { Outlet } from 'react-router-dom'
 import { DeepSpaceAuthProvider, useAuth } from 'deepspace'
 import { RecordProvider, RecordScope } from 'deepspace'
+import { WORKSPACE_SCHEMAS } from 'deepspace/worker'
 import { ToastProvider } from '../components/ui'
 import Navigation from '../components/Navigation'
 import { CrmPlatformProvider } from '../platform/CrmPlatformProvider'
@@ -49,7 +50,14 @@ function AuthGate({ children }: { children: ReactNode }) {
 
   return (
     <RecordProvider allowAnonymous>
-      <RecordScope roomId={SCOPE_ID} schemas={schemas} appId={APP_NAME}>
+      <RecordScope
+        roomId={SCOPE_ID}
+        schemas={schemas}
+        appId={APP_NAME}
+        sharedScopes={[
+          { roomId: 'workspace:default', schemas: WORKSPACE_SCHEMAS },
+        ]}
+      >
         {children}
       </RecordScope>
     </RecordProvider>

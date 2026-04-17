@@ -1,17 +1,26 @@
 /**
- * useEmail — Hook for DeepSpace email integration in the CRM.
+ * useEmail — DeepSpace email integration for the CRM.
  *
- * Email status: Uses the auth user's email from the session.
- * Send email: Uses the `email/send` integration endpoint on the new API worker.
+ * The user's @app.space identity is owned by the deepspace-mail app: it
+ * writes to the `email_handles` collection in `workspace:default`. Any
+ * other app (us) can read that collection by registering it as a shared
+ * scope in `_app.tsx`. We never write here — claiming a handle is
+ * exclusively done in deepspace-mail (mail.app.space).
  *
- * NOTE: The old Miyagi `my-email-address` / `send-user-email` endpoints
- * don't exist on the new DeepSpace API worker. The new API has `email/send`
- * (two-segment integration endpoint) which requires a `from` address.
- * For email status, we derive it from the signed-in user's email.
+ * Flow:
+ *   - has handle → emailAddress is the @app.space address; sendEmail uses
+ *     it as the FROM via the `email/send` integration on the api-worker.
+ *   - no handle → hasEmail is false; the email tab and the compose dialog
+ *     prompt the user to set one up at https://deepspace-mail.app.space.
+ *
+ * Caveat: inbound from external providers (e.g. hotmail → a@app.space)
+ * is currently not supported. CRM contacts that happen to be @app.space
+ * users won't actually receive these messages — outbound to real
+ * external mailboxes is the supported path here.
  */
 
-import { useState, useCallback } from 'react'
-import { integration, useUser } from 'deepspace'
+import { useState, useCallback, useMemo } from 'react'
+import { integration, useQuery, useUser } from 'deepspace'
 
 interface SendEmailParams {
   to: string[]
@@ -31,15 +40,20 @@ interface SendEmailResult {
 
 export function useEmail() {
   const { user } = useUser()
+  const { records, status } = useQuery<Record<string, unknown>>('email_handles')
   const [isSending, setIsSending] = useState(false)
 
-  // Derive email from the authenticated user
-  const emailAddress = user?.email ?? null
-  const hasEmail = !!emailAddress
+  const myHandle = useMemo(() => {
+    if (!user?.id) return null
+    return records.find(r => r.data.UserId === user.id) ?? null
+  }, [records, user?.id])
+
+  const emailAddress = (myHandle?.data.EmailAddress as string) ?? null
+  const hasEmail = !!myHandle
 
   const sendEmail = useCallback(async (params: SendEmailParams): Promise<SendEmailResult> => {
     if (!emailAddress) {
-      return { success: false, error: 'No email address available' }
+      return { success: false, error: 'No @app.space email handle claimed' }
     }
     setIsSending(true)
     try {
@@ -69,12 +83,12 @@ export function useEmail() {
     }
   }, [emailAddress])
 
-  const refreshEmailStatus = useCallback(() => {
-    // No-op — email status is derived from auth user session
-  }, [])
+  // No-op kept for API compatibility — handle changes flow in via the
+  // workspace:default subscription automatically.
+  const refreshEmailStatus = useCallback(() => {}, [])
 
   return {
-    isLoading: false,
+    isLoading: status === 'loading',
     emailAddress,
     hasEmail,
     isSending,

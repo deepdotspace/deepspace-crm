@@ -223,9 +223,10 @@ export function ComposeEmailDialog({
       <Dialog open={open} onOpenChange={v => { if (!v) onClose() }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Set Up Your Email</DialogTitle>
+            <DialogTitle>Claim Your @app.space Handle</DialogTitle>
             <DialogDescription>
-              You need a DeepSpace email address to send emails from the CRM.
+              Email handles are managed in DeepSpace Mail. Claim one there
+              and this dialog will start working automatically.
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col items-center gap-4 py-6">
@@ -233,14 +234,15 @@ export function ComposeEmailDialog({
               <Mail className="w-8 h-8 text-primary" />
             </div>
             <p className="text-sm text-muted-foreground text-center max-w-xs">
-              Create your free @app.space email address to start sending emails directly from your CRM.
+              Your @app.space address is shared across every DeepSpace app,
+              so claiming it once in Mail makes it available everywhere.
             </p>
             <Button
-              onClick={() => window.open('https://mail.app.space', '_blank', 'noopener')}
+              onClick={() => window.open('https://deepspace-mail.app.space', '_blank', 'noopener')}
               className="gap-2"
             >
               <ExternalLink className="w-4 h-4" />
-              Set Up Email
+              Open DeepSpace Mail
             </Button>
             <button
               onClick={onClose}

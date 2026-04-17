@@ -10,7 +10,7 @@ import { Button, Badge } from '../components/ui'
 import { ComposeEmailDialog } from '../components/ComposeEmailDialog'
 import {
   Send, Mail, Search, ExternalLink, Clock, Users, Building2,
-  CircleDollarSign, Plus,
+  CircleDollarSign, Plus, Info,
 } from 'lucide-react'
 
 function timeAgo(dateStr: string): string {
@@ -24,7 +24,7 @@ function timeAgo(dateStr: string): string {
 }
 
 export default function EmailPage() {
-  const { activities, people, companies, deals, emailAddress, hasEmail } = useCrm()
+  const { activities, people, companies, deals, emailAddress, hasEmail, isEmailLoading } = useCrm()
   const [search, setSearch] = useState('')
   const [showCompose, setShowCompose] = useState(false)
 
@@ -50,6 +50,16 @@ export default function EmailPage() {
     return map
   }, [people, companies, deals])
 
+  if (isEmailLoading) {
+    return (
+      <div data-testid="email-page" className="p-6 max-w-[800px] mx-auto">
+        <div className="flex items-center justify-center py-16 text-sm text-muted-foreground">
+          Loading email status...
+        </div>
+      </div>
+    )
+  }
+
   if (!hasEmail) {
     return (
       <div data-testid="email-page" className="p-6 max-w-[800px] mx-auto">
@@ -57,13 +67,18 @@ export default function EmailPage() {
           <div className="w-16 h-16 bg-primary/10 rounded-2xl flex items-center justify-center mb-4">
             <Mail className="w-8 h-8 text-primary" />
           </div>
-          <h2 className="text-lg font-semibold text-foreground mb-2">Set Up DeepSpace Email</h2>
+          <h2 className="text-lg font-semibold text-foreground mb-2">Claim Your @app.space Handle</h2>
           <p className="text-sm text-muted-foreground text-center max-w-sm mb-4">
-            Create your free @app.space email address to send emails directly from your CRM.
+            Email handles are managed in DeepSpace Mail. Claim your free
+            @app.space address there and it will automatically light up
+            this tab so you can send emails to your CRM contacts.
           </p>
-          <Button onClick={() => window.open('https://mail.app.space', '_blank', 'noopener')} className="gap-2">
+          <Button
+            onClick={() => window.open('https://deepspace-mail.app.space', '_blank', 'noopener')}
+            className="gap-2"
+          >
             <ExternalLink className="w-4 h-4" />
-            Set Up Email
+            Open DeepSpace Mail
           </Button>
         </div>
       </div>
@@ -84,6 +99,24 @@ export default function EmailPage() {
           <Plus className="w-3.5 h-3.5" />
           Compose
         </Button>
+      </div>
+
+      {/* Inbound caveat */}
+      <div className="flex items-start gap-2 mb-4 px-3 py-2 bg-secondary/30 border border-border rounded-lg text-xs text-muted-foreground">
+        <Info className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+        <span>
+          Outbound only — replies from external mailboxes won't land back
+          here. Use{' '}
+          <a
+            href="https://deepspace-mail.app.space"
+            target="_blank"
+            rel="noopener"
+            className="text-primary hover:underline"
+          >
+            DeepSpace Mail
+          </a>{' '}
+          for two-way conversations.
+        </span>
       </div>
 
       {/* Search */}

@@ -39,7 +39,7 @@
     "ai": "^4.0.0",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",
-    "deepspace": "file:/Users/yukewu/Desktop/Work/deepspace-crm/deepspace-0.1.1.tgz",
+    "deepspace": "file:../../deepspace-sdk/packages/deepspace/deepspace-0.1.1.tgz",
     "framer-motion": "^11.15.0",
     "hono": "^4.7.0",
     "lucide-react": "^0.460.0",
