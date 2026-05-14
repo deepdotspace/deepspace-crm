@@ -16,28 +16,15 @@
 
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
-import {
-  verifyJwt,
-  verifyInternalSignature,
-  buildInternalPayload,
-  createDeepSpaceAI,
-} from 'deepspace/worker'
+import { verifyJwt, apiWorkerFetch, platformWorkerFetch, authWorkerFetch } from 'deepspace/worker'
 import type { JwtVerifierConfig, VerifyResult } from 'deepspace/worker'
-import {
-  RecordRoom,
-  YjsRoom,
-  CanvasRoom,
-  MediaRoom,
-  PresenceRoom,
-  getGlobalDOSchemas,
-} from 'deepspace/worker'
+import { RecordRoom, YjsRoom, CanvasRoom, PresenceRoom, CronRoom } from 'deepspace/worker'
 import type { ActionTools, ActionResult, DOManifest, DOBindings } from 'deepspace/worker'
-import { streamText } from 'ai'
 import { actions } from './src/actions/index.js'
-import { handleCron } from './src/cron.js'
+import { tasks as cronTasks, runTask as runCronTask } from './src/cron.js'
 import { schemas } from './src/schemas.js'
 import { integrations } from './src/integrations.js'
-import { buildSystemPrompt, buildReadOnlyTools } from './src/ai/tools.js'
+import { registerAiChatRoutes } from './src/ai/chat-routes.js'
 
 // =============================================================================
 // DO Manifest — declares all Durable Objects for dynamic deploy bindings
@@ -47,41 +34,63 @@ export const __DO_MANIFEST__ = [
   { binding: 'RECORD_ROOMS', className: 'AppRecordRoom', sqlite: true },
   { binding: 'YJS_ROOMS', className: 'AppYjsRoom', sqlite: true },
   { binding: 'CANVAS_ROOMS', className: 'AppCanvasRoom', sqlite: true },
-  { binding: 'MEDIA_ROOMS', className: 'AppMediaRoom', sqlite: true },
   { binding: 'PRESENCE_ROOMS', className: 'AppPresenceRoom', sqlite: true },
+  { binding: 'CRON_ROOMS', className: 'AppCronRoom', sqlite: true },
 ] as const satisfies DOManifest
 
 // =============================================================================
 // Durable Objects — extend to customize behavior
 // =============================================================================
 
-export class AppRecordRoom extends RecordRoom {
+export class AppRecordRoom extends RecordRoom<Env> {
   constructor(state: DurableObjectState, env: Env) {
-    const name = state.id.name ?? ''
-    const scopeType = name.split(':')[0]
-    const globalSchemas = getGlobalDOSchemas(scopeType)
-    const effectiveSchemas = globalSchemas.length > 0 ? globalSchemas : schemas
-    super(state, env, effectiveSchemas, { ownerUserId: env.OWNER_USER_ID })
+    super(state, env, schemas, { ownerUserId: env.OWNER_USER_ID })
   }
 }
 
-export class AppYjsRoom extends YjsRoom {}
-export class AppCanvasRoom extends CanvasRoom {}
-export class AppMediaRoom extends MediaRoom {}
-export class AppPresenceRoom extends PresenceRoom {}
+export class AppYjsRoom extends YjsRoom<Env> {}
+export class AppCanvasRoom extends CanvasRoom<Env> {}
+export class AppPresenceRoom extends PresenceRoom<Env> {}
+
+/**
+ * AppCronRoom — runs scheduled tasks defined in src/cron.ts.
+ *
+ * Tasks are configured at construction time. The DO alarm fires at the
+ * next interval / cron-expression match, calls `onTask(name)`, and
+ * records the execution in its `cron_history` table. Admin clients can
+ * watch via the `useCronMonitor('app:<APP_NAME>')` hook.
+ */
+export class AppCronRoom extends CronRoom<Env> {
+  constructor(state: DurableObjectState, env: Env) {
+    super(state, env, { tasks: cronTasks })
+  }
+
+  protected async onTask(taskName: string): Promise<void> {
+    await runCronTask(taskName, this.env)
+  }
+}
 
 // =============================================================================
 // Types
 // =============================================================================
 
-interface Env extends DOBindings<typeof __DO_MANIFEST__> {
+export interface Env extends DOBindings<typeof __DO_MANIFEST__> {
   ASSETS: Fetcher
   FILES: R2Bucket
-  PLATFORM_WORKER: Fetcher
+  /**
+   * Upstream platform-worker. In production this is a [[services]] binding;
+   * in `deepspace dev` the binding is absent and the helper falls back to
+   * `PLATFORM_WORKER_URL` (written into .dev.vars by the CLI).
+   */
+  PLATFORM_WORKER?: Fetcher
+  PLATFORM_WORKER_URL?: string
   APP_IDENTITY_TOKEN: string
-  API_WORKER: Fetcher
-  /** Fallback URL when API_WORKER service binding is unavailable (local dev) */
-  API_WORKER_URL: string
+  /**
+   * Upstream api-worker. Same pattern as PLATFORM_WORKER above —
+   * binding in prod, URL fallback in dev.
+   */
+  API_WORKER?: Fetcher
+  API_WORKER_URL?: string
   AUTH_JWT_PUBLIC_KEY: string
   AUTH_JWT_ISSUER: string
   AUTH_WORKER_URL: string
@@ -95,27 +104,19 @@ interface Env extends DOBindings<typeof __DO_MANIFEST__> {
    */
   APP_OWNER_JWT: string
   INTERNAL_STORAGE_HMAC_SECRET: string
+  /**
+   * When set to "true", the app worker exposes /api/debug/* (set-role,
+   * sql, query, records, status) by forwarding to the RecordRoom DO's
+   * debug handler. Tests need this for role elevation and state cleanup.
+   *
+   * The CLI writes this to .dev.vars on `deepspace dev`/`deepspace test`
+   * but never to production secrets, so deployed apps don't expose
+   * debug routes by default.
+   */
+  ALLOW_DEBUG_ROUTES?: string
 }
 
-type AppContext = { Bindings: Env }
-
-// =============================================================================
-// Helpers
-// =============================================================================
-
-/**
- * Fetch from the api-worker. Uses the service binding in production,
- * falls back to API_WORKER_URL + global fetch in local dev.
- */
-function apiWorkerFetch(env: Env, path: string, init?: RequestInit): Promise<Response> {
-  if (env.API_WORKER && typeof env.API_WORKER.fetch === 'function') {
-    return env.API_WORKER.fetch(`https://api-worker${path}`, init)
-  }
-  // Local dev fallback
-  const base = env.API_WORKER_URL ?? ''
-  if (!base) return Promise.resolve(new Response(JSON.stringify({ error: 'API_WORKER not configured' }), { status: 502 }))
-  return fetch(`${base}${path}`, init)
-}
+export type AppContext = { Bindings: Env }
 
 // =============================================================================
 // App
@@ -161,7 +162,7 @@ app.get('/api/auth/oauth-complete', async (c) => {
 
   if (!code) return c.redirect(appOrigin)
 
-  const res = await fetch(`${c.env.AUTH_WORKER_URL}/api/auth/exchange-code`, {
+  const res = await authWorkerFetch(c.env, '/api/auth/exchange-code', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ code }),
@@ -187,8 +188,7 @@ app.get('/api/auth/oauth-complete', async (c) => {
 
 app.all('/api/auth/*', async (c) => {
   const url = new URL(c.req.url)
-  const authUrl = new URL(url.pathname + url.search, c.env.AUTH_WORKER_URL)
-  const res = await fetch(authUrl.toString(), {
+  const res = await authWorkerFetch(c.env, url.pathname + url.search, {
     method: c.req.method,
     headers: c.req.raw.headers,
     body: c.req.method !== 'GET' && c.req.method !== 'HEAD' ? c.req.raw.body : undefined,
@@ -202,6 +202,26 @@ app.all('/api/auth/*', async (c) => {
 })
 
 // ---------------------------------------------------------------------------
+// Debug proxy → app's RecordRoom DO
+//
+// Forwards /api/debug/* (set-role, sql, query, records, user-role, status)
+// to the DO's debug handler. The DO ships these endpoints unconditionally,
+// so we gate the proxy on env.ALLOW_DEBUG_ROUTES === "true". The CLI
+// writes that env var to .dev.vars on `deepspace dev`/`deepspace test`,
+// never to deploy secrets — so production apps return 404 here.
+// ---------------------------------------------------------------------------
+
+app.all('/api/debug/*', async (c) => {
+  if (c.env.ALLOW_DEBUG_ROUTES !== 'true') {
+    return c.notFound()
+  }
+  const stub = c.env.RECORD_ROOMS.get(c.env.RECORD_ROOMS.idFromName(`app:${c.env.APP_NAME}`))
+  // Forward verbatim, preserving method, headers, body, and the full URL
+  // (the DO's debug handler dispatches on url.pathname).
+  return stub.fetch(c.req.raw)
+})
+
+// ---------------------------------------------------------------------------
 // Integrations proxy → api-worker
 // ---------------------------------------------------------------------------
 
@@ -211,6 +231,42 @@ app.get('/api/integrations', async (c) => {
     return new Response(res.body, { status: res.status, headers: res.headers })
   } catch {
     return c.json({ error: 'Failed to fetch integration catalog' }, 502)
+  }
+})
+
+// OAuth: per-user connection status. Always user-billed — must forward caller's JWT.
+app.get('/api/integrations/status', async (c) => {
+  const auth = await resolveAuth(c.req.raw, c.env)
+  if (!auth) return c.json({ error: 'Sign in required' }, 401)
+  const token = c.req.header('Authorization')?.slice(7)
+  try {
+    const res = await apiWorkerFetch(c.env, '/api/integrations/status', {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    return new Response(res.body, { status: res.status, headers: res.headers })
+  } catch {
+    return c.json({ error: 'Status proxy failed' }, 502)
+  }
+})
+
+// OAuth: disconnect a provider for the calling user. Always user-billed.
+app.delete('/api/integrations/oauth/:provider/disconnect', async (c) => {
+  const auth = await resolveAuth(c.req.raw, c.env)
+  if (!auth) return c.json({ error: 'Sign in required' }, 401)
+  const token = c.req.header('Authorization')?.slice(7)
+  const provider = c.req.param('provider')
+  try {
+    const res = await apiWorkerFetch(
+      c.env,
+      `/api/integrations/oauth/${encodeURIComponent(provider)}/disconnect`,
+      {
+        method: 'DELETE',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      },
+    )
+    return new Response(res.body, { status: res.status, headers: res.headers })
+  } catch {
+    return c.json({ error: 'Disconnect proxy failed' }, 502)
   }
 })
 
@@ -260,6 +316,11 @@ app.all('/api/integrations/:name/:endpoint', async (c) => {
 // WebSocket routes
 // ---------------------------------------------------------------------------
 
+// The DO reads identity (userId, userName, userEmail, userImageUrl, role)
+// off the URL it receives and trusts it. Anything the client put on the URL
+// is stripped on every code path; identity is re-applied only from a
+// verified JWT. Three states: no token = anonymous (the SDK's
+// allowAnonymous flow), invalid token = 401, valid token = JWT identity.
 function wsRoute(
   doNamespace: (env: Env) => DurableObjectNamespace,
   extraParams?: (auth: VerifyResult) => Record<string, string>,
@@ -268,18 +329,30 @@ function wsRoute(
     const id = c.req.param('roomId') ?? c.req.param('docId') ?? c.req.param('scopeId')
     const url = new URL(c.req.url)
     const token = url.searchParams.get('token')
-    const auth = token ? (await verifyJwt(jwtConfig(c.env), token)).result : null
+
+    let auth: VerifyResult | null = null
+    if (token) {
+      auth = (await verifyJwt(jwtConfig(c.env), token)).result
+      if (!auth) return new Response('Unauthorized', { status: 401 })
+    }
 
     const doUrl = new URL(c.req.url)
+    doUrl.searchParams.delete('token')
+    for (const k of ['userId', 'userName', 'userEmail', 'userImageUrl', 'role']) {
+      doUrl.searchParams.delete(k)
+    }
+
     if (auth) {
       doUrl.searchParams.set('userId', auth.userId)
+      if (auth.claims.name) doUrl.searchParams.set('userName', auth.claims.name)
+      if (auth.claims.email) doUrl.searchParams.set('userEmail', auth.claims.email)
+      if (auth.claims.image) doUrl.searchParams.set('userImageUrl', auth.claims.image)
       if (extraParams) {
         for (const [k, v] of Object.entries(extraParams(auth))) {
           doUrl.searchParams.set(k, v)
         }
       }
     }
-    doUrl.searchParams.delete('token')
 
     const ns = doNamespace(c.env)
     const stub = ns.get(ns.idFromName(id))
@@ -287,38 +360,43 @@ function wsRoute(
   }
 }
 
-// Global scopes (workspace:*, dir:*, conv:*) live in the platform worker's
-// shared RecordRoom DOs — proxy WebSocket upgrades there so all apps share
-// the same data. App-local scopes (app:*) stay in our own DOs.
-// In local dev PLATFORM_WORKER isn't bound, so fall back to the local DO.
-const GLOBAL_SCOPE_PREFIXES = ['workspace:', 'dir:', 'conv:']
+app.get(
+  '/ws/:roomId',
+  wsRoute((env) => env.RECORD_ROOMS),
+)
 
-app.get('/ws/:roomId', (c) => {
-  const roomId = c.req.param('roomId')
-  if (
-    GLOBAL_SCOPE_PREFIXES.some(p => roomId.startsWith(p)) &&
-    c.env.PLATFORM_WORKER &&
-    typeof c.env.PLATFORM_WORKER.fetch === 'function'
-  ) {
-    return c.env.PLATFORM_WORKER.fetch(c.req.raw)
-  }
-  return wsRoute((env) => env.RECORD_ROOMS)(c)
-})
+app.get(
+  '/ws/yjs/:docId',
+  wsRoute(
+    (env) => env.YJS_ROOMS,
+    () => ({ role: 'member' }),
+  ),
+)
 
-app.get('/ws/yjs/:docId', wsRoute((env) => env.YJS_ROOMS, () => ({ role: 'member' })))
+app.get(
+  '/ws/canvas/:docId',
+  wsRoute(
+    (env) => env.CANVAS_ROOMS,
+    () => ({ role: 'member' }),
+  ),
+)
 
-app.get('/ws/canvas/:docId', wsRoute((env) => env.CANVAS_ROOMS, () => ({ role: 'member' })))
+app.get(
+  '/ws/presence/:scopeId',
+  wsRoute(
+    (env) => env.PRESENCE_ROOMS,
+    (auth) => ({
+      ...(auth.claims.name ? { userName: auth.claims.name } : {}),
+      ...(auth.claims.email ? { userEmail: auth.claims.email } : {}),
+      ...(auth.claims.image ? { userImageUrl: auth.claims.image } : {}),
+    }),
+  ),
+)
 
-app.get('/ws/media/:roomId', wsRoute((env) => env.MEDIA_ROOMS, () => ({ role: 'member' })))
-
-app.get('/ws/presence/:scopeId', wsRoute(
-  (env) => env.PRESENCE_ROOMS,
-  (auth) => ({
-    ...(auth.claims.name ? { userName: auth.claims.name } : {}),
-    ...(auth.claims.email ? { userEmail: auth.claims.email } : {}),
-    ...(auth.claims.image ? { userImageUrl: auth.claims.image } : {}),
-  }),
-))
+app.get(
+  '/ws/cron/:roomId',
+  wsRoute((env) => env.CRON_ROOMS),
+)
 
 // ---------------------------------------------------------------------------
 // Server actions
@@ -333,7 +411,7 @@ app.post('/api/actions/:name', async (c) => {
   const params = await c.req.json<Record<string, unknown>>()
   const callerJwt = c.req.header('Authorization')!.slice(7)
   const tools = createActionTools(c.env, auth.userId, callerJwt)
-  const result = await action({ userId: auth.userId, params, tools })
+  const result = await action({ userId: auth.userId, params, tools, env: c.env })
   return c.json(result as unknown as Record<string, unknown>)
 })
 
@@ -341,50 +419,10 @@ app.post('/api/actions/:name', async (c) => {
 // AI chat — multi-turn tool-use via Vercel AI SDK + DeepSpace proxy
 // ---------------------------------------------------------------------------
 
-app.post('/api/ai/chat', async (c) => {
-  const auth = await resolveAuth(c.req.raw, c.env)
-  if (!auth) return c.json({ error: 'Unauthorized' }, 401)
-
-  const { messages } = await c.req.json<{ messages: Array<{ role: string; content: string }> }>()
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return c.json({ error: 'messages array is required' }, 400)
-  }
-
-  const jwt = c.req.header('Authorization')!.slice(7)
-
-  const anthropic = createDeepSpaceAI(c.env, 'anthropic', { authToken: jwt })
-
-  // Read-only tools that execute against the app's RecordRoom DO
-  const scopeId = `app:${c.env.APP_NAME}`
-  const tools = buildReadOnlyTools(async (toolName, params) => {
-    const doId = c.env.RECORD_ROOMS.idFromName(scopeId)
-    const stub = c.env.RECORD_ROOMS.get(doId)
-    const res = await stub.fetch(new Request('https://internal/api/tools/execute', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-user-id': auth.userId },
-      body: JSON.stringify({ tool: toolName, params }),
-    }))
-    return res.json()
-  })
-
-  const result = streamText({
-    model: anthropic('claude-sonnet-4-20250514'),
-    system: buildSystemPrompt(c.env.APP_NAME, schemas),
-    messages,
-    tools,
-    maxSteps: 5,
-    onError: ({ error }) => {
-      console.error('[ai-chat] streamText error:', error)
-    },
-  })
-
-  return result.toDataStreamResponse({
-    getErrorMessage: (error) => {
-      console.error('[ai-chat] response error:', error)
-      return error instanceof Error ? error.message : String(error)
-    },
-  })
-})
+// Routes implementation lives in `src/ai/chat-routes.ts` to keep this file
+// focused on app-level wiring. `resolveAuth` is passed in to avoid a runtime
+// circular import (chat-routes imports `Env`/`AppContext` as types only).
+registerAiChatRoutes(app, resolveAuth)
 
 // ---------------------------------------------------------------------------
 // Scoped R2 files → platform-worker
@@ -403,7 +441,8 @@ app.all('/api/files/*', async (c) => {
   headers.set('x-app-name', c.env.APP_NAME)
   if (userId) headers.set('x-user-id', userId)
 
-  const resp = await c.env.PLATFORM_WORKER.fetch(
+  const resp = await platformWorkerFetch(
+    c.env,
     new Request(platformUrl.toString(), {
       method: c.req.method,
       headers,
@@ -429,20 +468,73 @@ app.all('/api/files/*', async (c) => {
 })
 
 // ---------------------------------------------------------------------------
-// Internal cron (HMAC-authenticated)
+// /_deepspace/* — same-origin proxy to api-worker for authenticated SDK
+// hooks. Attaches APP_IDENTITY_TOKEN + APP_NAME so the browser never sees
+// the platform secret. Every request requires a signed user JWT.
+//
+// SECURITY: exact (method, path) allowlist — not a prefix match. A prefix
+// match leaks deploy/CLI surfaces like POST /api/subscriptions/sync into the
+// browser context, where an XSS or compromised user session can become a
+// confused deputy. Adding a new browser hook in the SDK requires explicitly
+// extending the BROWSER_PROXY_ROUTES tuple below.
 // ---------------------------------------------------------------------------
 
-app.post('/internal/cron', async (c) => {
-  const body = await c.req.text()
-  const valid = await verifyInternalSignature({
-    secret: c.env.INTERNAL_STORAGE_HMAC_SECRET,
-    payload: buildInternalPayload(body),
-    signature: c.req.header('x-internal-signature') ?? '',
-    timestamp: c.req.header('x-internal-timestamp') ?? '',
+interface ProxyRoute {
+  method: string
+  path: string
+  /** Skip the user-JWT gate. Default false. Pricing tables are public. */
+  publicRead?: boolean
+  /** Inject `?appName=...` (from env) into the forwarded URL. Default false. */
+  injectAppName?: boolean
+}
+
+const BROWSER_PROXY_ROUTES: ReadonlyArray<ProxyRoute> = [
+  // useSubscription — read state, subscribe, manage billing.
+  { method: 'GET',  path: '/_deepspace/subscriptions/me' },
+  { method: 'POST', path: '/_deepspace/subscriptions/checkout' },
+  { method: 'POST', path: '/_deepspace/subscriptions/portal' },
+  // useCheckout (one-time charges)
+  { method: 'POST', path: '/_deepspace/charges/create' },
+  { method: 'GET',  path: '/_deepspace/charges/me' },
+]
+
+app.all('/_deepspace/*', async (c) => {
+  const url = new URL(c.req.url)
+  const method = c.req.method
+  const route = BROWSER_PROXY_ROUTES.find(
+    (r) => r.method === method && r.path === url.pathname,
+  )
+  if (!route) {
+    return c.json({ error: 'not_found' }, 404)
+  }
+
+  // Public-read routes (pricing tables) skip the JWT gate. Everything else
+  // requires a signed-in user.
+  let auth: Awaited<ReturnType<typeof resolveAuth>> | null = null
+  if (!route.publicRead) {
+    auth = await resolveAuth(c.req.raw, c.env)
+    if (!auth?.userId) return c.json({ error: 'unauthorized' }, 401)
+  }
+
+  const forwardedParams = new URLSearchParams(url.search)
+  if (route.injectAppName) {
+    forwardedParams.set('appName', c.env.APP_NAME)
+  }
+  const queryString = forwardedParams.toString()
+  const apiPath =
+    url.pathname.replace('/_deepspace/', '/api/') + (queryString ? `?${queryString}` : '')
+
+  const headers = new Headers(c.req.raw.headers)
+  headers.delete('x-user-id')
+  headers.set('x-app-identity-token', c.env.APP_IDENTITY_TOKEN)
+  headers.set('x-app-name', c.env.APP_NAME)
+  if (auth?.userId) headers.set('x-user-id', auth.userId)
+
+  return apiWorkerFetch(c.env, apiPath, {
+    method,
+    headers,
+    body: ['GET', 'HEAD'].includes(method) ? undefined : c.req.raw.body,
   })
-  if (!valid) return c.json({ error: 'Forbidden' }, 403)
-  await handleCron(JSON.parse(body))
-  return c.json({ ok: true })
 })
 
 // ---------------------------------------------------------------------------
@@ -464,24 +556,31 @@ app.get('*', async (c) => {
 // =============================================================================
 
 function createActionTools(env: Env, userId: string, callerJwt: string): ActionTools {
-  const scopeId = `app:${env.APP_NAME}`
+  const stub = env.RECORD_ROOMS.get(env.RECORD_ROOMS.idFromName(`app:${env.APP_NAME}`))
 
-  async function execTool(tool: string, params: Record<string, unknown>): Promise<ActionResult> {
-    const doId = env.RECORD_ROOMS.idFromName(scopeId)
-    const stub = env.RECORD_ROOMS.get(doId)
+  // Internal helper — DO returns `ActionResult<unknown>`. Callers below
+  // cast to the precisely-typed result for each operation. The cast is
+  // safe because the wire shape is set by the SDK's tools-api handler.
+  async function execTool<TData>(
+    tool: string,
+    params: Record<string, unknown>,
+  ): Promise<ActionResult<TData>> {
     const res = await stub.fetch(new Request('https://internal/api/tools/execute', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-user-id': userId,
-        'x-app-action': 'true',
+        'X-User-Id': userId,
+        'X-App-Action': 'true',
       },
       body: JSON.stringify({ tool, params }),
     }))
-    return res.json() as Promise<ActionResult>
+    return res.json() as Promise<ActionResult<TData>>
   }
 
-  async function callIntegration(endpoint: string, data?: unknown): Promise<ActionResult> {
+  async function callIntegration<T>(
+    endpoint: string,
+    data?: unknown,
+  ): Promise<ActionResult<{ response: T; status?: number }>> {
     const integrationName = endpoint.split('/')[0]
     const billingMode = integrations[integrationName]?.billing ?? 'developer'
 
@@ -495,17 +594,18 @@ function createActionTools(env: Env, userId: string, callerJwt: string): ActionT
         'Content-Type': 'application/json',
         Authorization: `Bearer ${jwt}`,
       },
-      body: data != null ? JSON.stringify(data) : undefined,
+      body: JSON.stringify(data ?? {}),
     })
-    return res.json() as Promise<ActionResult>
+    return res.json() as Promise<ActionResult<{ response: T; status?: number }>>
   }
 
   return {
-    create: (sid, collection, data) => execTool('records.create', { scopeId: sid, collection, data }),
-    update: (sid, collection, recordId, data) => execTool('records.update', { scopeId: sid, collection, recordId, data }),
-    remove: (sid, collection, recordId) => execTool('records.delete', { scopeId: sid, collection, recordId }),
-    get: (sid, collection, recordId) => execTool('records.get', { scopeId: sid, collection, recordId }),
-    query: (sid, collection, options) => execTool('records.query', { scopeId: sid, collection, ...options }),
+    create: (collection, data) => execTool('records.create', { collection, data }),
+    update: (collection, recordId, data) =>
+      execTool('records.update', { collection, recordId, data }),
+    remove: (collection, recordId) => execTool('records.delete', { collection, recordId }),
+    get: (collection, recordId) => execTool('records.get', { collection, recordId }),
+    query: (collection, options) => execTool('records.query', { collection, ...options }),
     integration: callIntegration,
   }
 }

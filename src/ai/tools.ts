@@ -2,16 +2,19 @@
  * AI Tool Definitions — converts DeepSpace BUILT_IN_TOOLS to Vercel AI SDK tools.
  *
  * Only exposes read-only tools so the assistant can inspect data but never mutate it.
+ * (Per-collection RBAC at the DO layer is the actual security boundary; trimming
+ * this allowlist is defense-in-depth at the app level.)
  */
 
 import { tool } from 'ai'
+import type { ToolSet } from 'ai'
 import { z } from 'zod'
 import { BUILT_IN_TOOLS } from 'deepspace/worker'
 import type { ToolSchema, CollectionSchema } from 'deepspace/worker'
 
 type ToolExecutor = (toolName: string, params: Record<string, unknown>) => Promise<unknown>
 
-const READ_ONLY_TOOL_NAMES = [
+const ALLOWED_TOOL_NAMES = [
   'schema.list',
   'schema.describe',
   'records.query',
@@ -61,16 +64,16 @@ export function buildSystemPrompt(appName: string, schemas: CollectionSchema[]):
 // Tool definitions
 // ============================================================================
 
-export function buildReadOnlyTools(executor: ToolExecutor) {
-  const tools: Record<string, ReturnType<typeof tool>> = {}
+export function buildTools(executor: ToolExecutor): ToolSet {
+  const tools: ToolSet = {}
 
   for (const def of BUILT_IN_TOOLS) {
-    if (!READ_ONLY_TOOL_NAMES.includes(def.name)) continue
+    if (!ALLOWED_TOOL_NAMES.includes(def.name)) continue
     const safeName = def.name.replace('.', '_')
     tools[safeName] = tool({
       description: def.description,
-      parameters: buildZodSchema(def),
-      execute: async (params) => executor(def.name, params as Record<string, unknown>),
+      inputSchema: buildZodSchema(def),
+      execute: async (params: Record<string, unknown>) => executor(def.name, params),
     })
   }
 
