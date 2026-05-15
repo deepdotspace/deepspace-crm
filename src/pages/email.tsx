@@ -178,6 +178,18 @@ export default function EmailPage() {
 
         const payload = ((result.data ?? result) as unknown) as InboxPayload
         if (payload?.requiresOAuth && typeof payload.authUrl === 'string') {
+          // Optimistically clear the local "connected" state. Otherwise
+          // the status badge keeps saying "connected" while the popup
+          // waits for re-consent — looks broken even though the flow
+          // is doing the right thing. The api-worker also clears its
+          // stored row on the same 401, so the next refreshStatus()
+          // poll will agree.
+          setStatus(EMPTY_STATUS)
+          setMessages(null)
+          setTokensVisited([null])
+          setCurrentPageIndex(0)
+          setNextPageToken(null)
+
           const popup = window.open(payload.authUrl, 'google-auth', 'width=500,height=600')
           if (!popup) {
             window.location.href = payload.authUrl
