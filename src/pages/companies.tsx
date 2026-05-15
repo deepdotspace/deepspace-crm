@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
+import { useAuth, AuthOverlay } from 'deepspace'
 import { useCrm } from '../platform/CrmPlatformProvider'
 import { Button, Badge } from '../components/ui'
 import { AddCompanyDialog } from '../components/AddCompanyDialog'
@@ -16,9 +17,12 @@ function formatCurrency(amount: number): string {
 
 export default function CompaniesPage() {
   const { companies, deals, people } = useCrm()
+  const { isSignedIn } = useAuth()
   const [search, setSearch] = useState('')
   const [showAdd, setShowAdd] = useState(false)
+  const [showAuth, setShowAuth] = useState(false)
   const [view, setView] = useState<'grid' | 'list'>('grid')
+  const handleAdd = () => (isSignedIn ? setShowAdd(true) : setShowAuth(true))
 
   const companyStats = useMemo(() => {
     const stats: Record<string, { dealCount: number; openDealCount: number; contactCount: number; totalValue: number; wonValue: number }> = {}
@@ -78,7 +82,7 @@ export default function CompaniesPage() {
               <List className="w-3.5 h-3.5" />
             </button>
           </div>
-          <Button data-testid="add-company-btn" size="sm" onClick={() => setShowAdd(true)}>
+          <Button data-testid="add-company-btn" size="sm" onClick={handleAdd}>
             <Plus className="w-3.5 h-3.5" />
             Add Company
           </Button>
@@ -105,7 +109,7 @@ export default function CompaniesPage() {
             {search ? 'No companies match your search' : 'No companies yet'}
           </p>
           {!search && (
-            <Button variant="outline" size="sm" className="mt-3" onClick={() => setShowAdd(true)}>
+            <Button variant="outline" size="sm" className="mt-3" onClick={handleAdd}>
               <Plus className="w-3.5 h-3.5" />
               Add your first company
             </Button>
@@ -200,6 +204,7 @@ export default function CompaniesPage() {
       )}
 
       <AddCompanyDialog open={showAdd} onClose={() => setShowAdd(false)} />
+      {showAuth && <AuthOverlay onClose={() => setShowAuth(false)} />}
     </div>
   )
 }

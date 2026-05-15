@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from 'react'
 import { Link } from 'react-router-dom'
+import { useAuth, AuthOverlay } from 'deepspace'
 import { useCrm } from '../platform/CrmPlatformProvider'
 import { Button, Badge } from '../components/ui'
 import { AddContactDialog } from '../components/AddContactDialog'
@@ -41,9 +42,12 @@ function getAvatarColor(name: string): string {
 
 export default function ContactsPage() {
   const { people, companies, deals, dealContacts, activities } = useCrm()
+  const { isSignedIn } = useAuth()
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState<string>('all')
   const [showAdd, setShowAdd] = useState(false)
+  const [showAuth, setShowAuth] = useState(false)
+  const handleAdd = () => (isSignedIn ? setShowAdd(true) : setShowAuth(true))
   const [sortBy, setSortBy] = useState<'name' | 'recent' | 'company'>('name')
   const [emailTarget, setEmailTarget] = useState<{ email: string; name: string; id: string; companyId?: string } | null>(null)
 
@@ -126,7 +130,7 @@ export default function ContactsPage() {
           <h1 className="text-lg font-semibold text-foreground">Contacts</h1>
           <p className="text-sm text-muted-foreground">{people.length} total contacts</p>
         </div>
-        <Button data-testid="add-contact-btn" size="sm" onClick={() => setShowAdd(true)}>
+        <Button data-testid="add-contact-btn" size="sm" onClick={handleAdd}>
           <Plus className="w-3.5 h-3.5" />
           Add Contact
         </Button>
@@ -183,7 +187,7 @@ export default function ContactsPage() {
             {search ? 'No contacts match your search' : 'No contacts yet'}
           </p>
           {!search && (
-            <Button variant="outline" size="sm" className="mt-3" onClick={() => setShowAdd(true)}>
+            <Button variant="outline" size="sm" className="mt-3" onClick={handleAdd}>
               <Plus className="w-3.5 h-3.5" />
               Add your first contact
             </Button>
@@ -270,6 +274,7 @@ export default function ContactsPage() {
       )}
 
       <AddContactDialog open={showAdd} onClose={() => setShowAdd(false)} />
+      {showAuth && <AuthOverlay onClose={() => setShowAuth(false)} />}
 
       <ComposeEmailDialog
         open={!!emailTarget}

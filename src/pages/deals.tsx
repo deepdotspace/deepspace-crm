@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
+import { useAuth, AuthOverlay } from 'deepspace'
 import { useCrm } from '../platform/CrmPlatformProvider'
 import { Button, Badge } from '../components/ui'
 import { AddDealDialog } from '../components/AddDealDialog'
@@ -19,8 +20,11 @@ function daysAgo(dateStr: string): number {
 
 export default function DealsPage() {
   const { deals, stages, companies, activities, updateDeal } = useCrm()
+  const { isSignedIn } = useAuth()
   const [view, setView] = useState<'board' | 'list'>('board')
   const [showAdd, setShowAdd] = useState(false)
+  const [showAuth, setShowAuth] = useState(false)
+  const handleAdd = () => (isSignedIn ? setShowAdd(true) : setShowAuth(true))
   const [statusFilter, setStatusFilter] = useState<string>('open')
   const [sortBy, setSortBy] = useState<'amount' | 'date' | 'name'>('date')
   const [draggingDealId, setDraggingDealId] = useState<string | null>(null)
@@ -152,7 +156,7 @@ export default function DealsPage() {
             </button>
           </div>
 
-          <Button data-testid="add-deal-btn" size="sm" onClick={() => setShowAdd(true)}>
+          <Button data-testid="add-deal-btn" size="sm" onClick={handleAdd}>
             <Plus className="w-3.5 h-3.5" />
             Add Deal
           </Button>
@@ -342,6 +346,7 @@ export default function DealsPage() {
       )}
 
       <AddDealDialog open={showAdd} onClose={() => setShowAdd(false)} />
+      {showAuth && <AuthOverlay onClose={() => setShowAuth(false)} />}
     </div>
   )
 }

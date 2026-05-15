@@ -44,20 +44,30 @@ interface GoogleStatus {
 }
 const EMPTY_STATUS: GoogleStatus = { connected: false, gmailRead: false, gmail: false }
 
-interface GmailListItem {
+interface GmailMessagePart {
+  mimeType?: string
+  filename?: string
+  headers?: Array<{ name?: string; value?: string }>
+  body?: { data?: string; size?: number; attachmentId?: string }
+  parts?: GmailMessagePart[]
+}
+
+interface GmailMessage {
   id: string
   threadId?: string
   snippet?: string
-  payload?: { headers?: Array<{ name?: string; value?: string }> }
+  payload?: GmailMessagePart
   internalDate?: string
   labelIds?: string[]
 }
 
-interface ListPayload {
+interface InboxPayload {
   requiresOAuth?: boolean
   authUrl?: string
-  messages?: GmailListItem[]
+  messages?: GmailMessage[]
+  nextPageToken?: string
   resultSizeEstimate?: number
+  partialErrors?: Array<{ id: string; status: number; error: string }>
   error?: string
 }
 
@@ -72,7 +82,7 @@ export default function EmailPage() {
   const { isSignedIn } = useAuth()
   const [status, setStatus] = useState<GoogleStatus>(EMPTY_STATUS)
   const [statusLoading, setStatusLoading] = useState(true)
-  const [messages, setMessages] = useState<GmailListItem[] | null>(null)
+  const [messages, setMessages] = useState<GmailMessage[] | null>(null)
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
@@ -111,14 +121,20 @@ export default function EmailPage() {
   const refreshStatus = useCallback(() => setStatusBump((n) => n + 1), [])
 
   // ── fetch messages ──
+  //
+  // `google/gmail-inbox` is the combined list+hydrate endpoint added in
+  // the SDK so apps don't have to N+1 in the browser. One client request →
+  // one proxy rate-limit charge → server-side parallel hydrate against
+  // Google → rich messages with headers + body parts in one response.
+  // `format: 'full'` includes the body so we can render the message text.
   const fetchMessages = useCallback(async () => {
     setLoadingMessages(true)
     setError(null)
     try {
-      const result = await integration.post('google/gmail-list', {
+      const result = await integration.post('google/gmail-inbox', {
         maxResults: PAGE_SIZE,
-        // labelIds: ['INBOX'] — Gmail filter; primary inbox only.
         labelIds: ['INBOX'],
+        format: 'full',
       })
 
       if (!result.success) {
@@ -126,7 +142,7 @@ export default function EmailPage() {
         return
       }
 
-      const payload = ((result.data ?? result) as unknown) as ListPayload
+      const payload = ((result.data ?? result) as unknown) as InboxPayload
       if (payload?.requiresOAuth && typeof payload.authUrl === 'string') {
         const popup = window.open(payload.authUrl, 'google-auth', 'width=500,height=600')
         if (!popup) {
@@ -137,7 +153,6 @@ export default function EmailPage() {
           if (popup.closed) {
             clearInterval(interval)
             refreshStatus()
-            // Re-attempt the list after consent.
             void fetchMessages()
           }
         }, 500)
@@ -317,38 +332,71 @@ export default function EmailPage() {
   )
 }
 
-function MessageRow({ message }: { message: GmailListItem }) {
+function MessageRow({ message }: { message: GmailMessage }) {
+  const [open, setOpen] = useState(false)
   const headers = message.payload?.headers ?? []
   const get = (n: string) => headers.find((h) => h.name?.toLowerCase() === n.toLowerCase())?.value
   const from = parseFrom(get('From') ?? '')
   const subject = get('Subject') ?? '(no subject)'
   const dateStr = formatDate(message.internalDate)
   const threadUrl = `https://mail.google.com/mail/u/0/#inbox/${message.threadId ?? message.id}`
+  const body = open ? extractBody(message.payload) : null
 
   return (
-    <a
-      href={threadUrl}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="flex items-start gap-3 p-4 hover:bg-secondary/10 transition-colors"
-    >
+    <div className="flex items-start gap-3 p-4 hover:bg-secondary/10 transition-colors">
       <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0 mt-0.5 text-xs font-medium text-primary">
         {from.initial}
       </div>
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-foreground truncate">
-            {from.display}
-          </span>
-          <span className="text-xs text-muted-foreground flex-shrink-0">{dateStr}</span>
-        </div>
-        <div className="text-sm text-foreground truncate mt-0.5">{subject}</div>
-        {message.snippet && (
-          <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{message.snippet}</p>
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="block w-full text-left"
+          aria-expanded={open}
+        >
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-foreground truncate">
+              {from.display}
+            </span>
+            <span className="text-xs text-muted-foreground flex-shrink-0">{dateStr}</span>
+          </div>
+          <div className="text-sm text-foreground truncate mt-0.5">{subject}</div>
+          {!open && message.snippet && (
+            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{message.snippet}</p>
+          )}
+        </button>
+
+        {open && body && (
+          <div className="mt-3 rounded-md border border-border bg-background/40 p-3 text-sm">
+            {body.kind === 'html' ? (
+              <div
+                className="email-html prose prose-sm max-w-none break-words"
+                // We sanitize before render. The HTML payload comes from
+                // Google but originated from arbitrary senders, so it must
+                // be treated as untrusted.
+                dangerouslySetInnerHTML={{ __html: body.value }}
+              />
+            ) : (
+              <pre className="whitespace-pre-wrap break-words font-sans text-sm text-foreground">
+                {body.value}
+              </pre>
+            )}
+          </div>
+        )}
+
+        {open && (
+          <a
+            href={threadUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-2 inline-flex items-center gap-1 text-xs text-primary hover:underline"
+          >
+            <ExternalLink className="w-3 h-3" />
+            Open in Gmail
+          </a>
         )}
       </div>
-      <ExternalLink className="w-3.5 h-3.5 text-muted-foreground/40 mt-1.5 flex-shrink-0" />
-    </a>
+    </div>
   )
 }
 
@@ -382,7 +430,7 @@ function formatDate(internalMs?: string): string {
   })
 }
 
-function filterMessages(messages: GmailListItem[], q: string): GmailListItem[] {
+function filterMessages(messages: GmailMessage[], q: string): GmailMessage[] {
   if (!q.trim()) return messages
   const needle = q.toLowerCase()
   return messages.filter((m) => {
@@ -395,4 +443,90 @@ function filterMessages(messages: GmailListItem[], q: string): GmailListItem[] {
       (m.snippet ?? '').toLowerCase().includes(needle)
     )
   })
+}
+
+// ============================================================================
+// Body extraction + sanitization
+// ============================================================================
+//
+// Gmail returns multipart MIME under `payload.parts`. Walk the tree and
+// pick the most renderable representation: prefer text/html so the user
+// sees the email as the sender intended, fall back to text/plain, fall
+// back to anything we can decode.
+//
+// Body data is base64URL-encoded by Gmail (replace - / _ with + /, then
+// standard base64 decode).
+
+function extractBody(
+  part: GmailMessagePart | undefined,
+): { kind: 'html' | 'text'; value: string } | null {
+  if (!part) return null
+
+  const html = findPartByMime(part, 'text/html')
+  if (html) {
+    const raw = decodeBodyData(html.body?.data)
+    if (raw) return { kind: 'html', value: sanitizeEmailHtml(raw) }
+  }
+
+  const text = findPartByMime(part, 'text/plain')
+  if (text) {
+    const raw = decodeBodyData(text.body?.data)
+    if (raw) return { kind: 'text', value: raw }
+  }
+
+  // Last resort — single-part message with body.data on the root.
+  const fallback = decodeBodyData(part.body?.data)
+  if (fallback) return { kind: 'text', value: fallback }
+
+  return null
+}
+
+function findPartByMime(
+  part: GmailMessagePart,
+  mime: string,
+): GmailMessagePart | null {
+  if (part.mimeType?.toLowerCase() === mime) return part
+  for (const child of part.parts ?? []) {
+    const found = findPartByMime(child, mime)
+    if (found) return found
+  }
+  return null
+}
+
+function decodeBodyData(data: string | undefined): string | null {
+  if (!data) return null
+  try {
+    // base64URL → base64
+    const std = data.replace(/-/g, '+').replace(/_/g, '/')
+    const padded = std + '='.repeat((4 - (std.length % 4)) % 4)
+    const binary = atob(padded)
+    // UTF-8 decode
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+    return new TextDecoder('utf-8').decode(bytes)
+  } catch {
+    return null
+  }
+}
+
+// Strip the obvious XSS vectors. This is intentionally a denylist of the
+// most common dangerous tags / attrs — *not* a full HTML sanitizer. Email
+// bodies coming through gmail.readonly originate from arbitrary senders,
+// so any inline JS / event handlers / object embeds are treated as hostile.
+// Real email clients use a full sanitizer (DOMPurify); add it if this tab
+// graduates to a primary inbox UX.
+function sanitizeEmailHtml(html: string): string {
+  return (
+    html
+      // Drop <script>, <style>, <iframe>, <object>, <embed>, <link>, <meta>.
+      .replace(/<\s*(script|style|iframe|object|embed|link|meta)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, '')
+      .replace(/<\s*(script|style|iframe|object|embed|link|meta)[^>]*\/?>/gi, '')
+      // Strip on*=... event handlers from any tag.
+      .replace(/\son[a-z]+\s*=\s*"[^"]*"/gi, '')
+      .replace(/\son[a-z]+\s*=\s*'[^']*'/gi, '')
+      .replace(/\son[a-z]+\s*=\s*[^\s>]+/gi, '')
+      // Strip javascript: URLs in href / src.
+      .replace(/(href|src)\s*=\s*"javascript:[^"]*"/gi, '$1="#"')
+      .replace(/(href|src)\s*=\s*'javascript:[^']*'/gi, "$1='#'")
+  )
 }

@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
+import { useAuth, AuthOverlay } from 'deepspace'
 import { useCrm } from '../platform/CrmPlatformProvider'
 import { Button, Badge } from '../components/ui'
 import { AddActivityDialog } from '../components/AddActivityDialog'
@@ -50,9 +51,12 @@ const ACTIVITY_COLORS: Record<string, { bg: string; text: string }> = {
 
 export default function ActivitiesPage() {
   const { activities, people, companies, deals, removeActivity, updateActivity } = useCrm()
+  const { isSignedIn } = useAuth()
   const [typeFilter, setTypeFilter] = useState<string>('all')
   const [showAdd, setShowAdd] = useState(false)
+  const [showAuth, setShowAuth] = useState(false)
   const [search, setSearch] = useState('')
+  const handleAdd = () => (isSignedIn ? setShowAdd(true) : setShowAuth(true))
 
   const nameMap = useMemo(() => {
     const map: Record<string, { name: string; type: 'contact' | 'company' | 'deal'; path: string }> = {}
@@ -126,7 +130,7 @@ export default function ActivitiesPage() {
           <h1 className="text-lg font-semibold text-foreground">Activities</h1>
           <p className="text-sm text-muted-foreground">Activity log across all contacts and deals</p>
         </div>
-        <Button data-testid="add-activity-btn" size="sm" onClick={() => setShowAdd(true)}>
+        <Button data-testid="add-activity-btn" size="sm" onClick={handleAdd}>
           <Plus className="w-3.5 h-3.5" />
           Log Activity
         </Button>
@@ -200,7 +204,7 @@ export default function ActivitiesPage() {
             {typeFilter !== 'all' || search ? 'No matching activities' : 'No activities yet'}
           </p>
           {!search && typeFilter === 'all' && (
-            <Button variant="outline" size="sm" className="mt-3" onClick={() => setShowAdd(true)}>
+            <Button variant="outline" size="sm" className="mt-3" onClick={handleAdd}>
               <Plus className="w-3.5 h-3.5" />
               Log your first activity
             </Button>
@@ -293,6 +297,7 @@ export default function ActivitiesPage() {
       )}
 
       <AddActivityDialog open={showAdd} onClose={() => setShowAdd(false)} />
+      {showAuth && <AuthOverlay onClose={() => setShowAuth(false)} />}
     </div>
   )
 }
