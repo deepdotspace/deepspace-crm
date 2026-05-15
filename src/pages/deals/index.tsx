@@ -1,14 +1,14 @@
 import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth, AuthOverlay } from 'deepspace'
-import { useCrm } from '../platform/CrmPlatformProvider'
-import { Button, Badge } from '../components/ui'
-import { AddDealDialog } from '../components/AddDealDialog'
+import { useCrm } from '../../platform/CrmPlatformProvider'
+import { Button, Badge } from '../../components/ui'
+import { AddDealDialog } from '../../components/AddDealDialog'
 import {
   LayoutGrid, List, Plus, Filter, AlertTriangle, Clock,
   Building2, Calendar, ArrowUpDown,
 } from 'lucide-react'
-import type { Deal } from '../platform/types'
+import type { Deal } from '../../platform/types'
 
 function formatCurrency(amount: number): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(amount)

@@ -3,11 +3,10 @@ import { useMemo, useState, useCallback } from 'react'
 import { useCrm } from '../../platform/CrmPlatformProvider'
 import { Badge, Button, Input } from '../../components/ui'
 import { AddActivityDialog } from '../../components/AddActivityDialog'
-import { ComposeEmailDialog } from '../../components/ComposeEmailDialog'
 import {
   ArrowLeft, Building2, Mail, Phone, Calendar, MapPin,
   CircleDollarSign, Clock, Pencil, Check, X, Trash2,
-  Plus, FileText, MessageSquare, Send,
+  Plus, FileText, MessageSquare,
 } from 'lucide-react'
 
 function timeAgo(dateStr: string): string {
@@ -48,7 +47,6 @@ export default function ContactDetailPage() {
   const [editValue, setEditValue] = useState('')
   const [showAddActivity, setShowAddActivity] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
-  const [showCompose, setShowCompose] = useState(false)
 
   const person = useMemo(() => people.find(p => p.id === id), [people, id])
   const company = useMemo(
@@ -134,12 +132,6 @@ export default function ContactDetailPage() {
                 )}
               </div>
               <div className="flex items-center gap-1.5">
-                {person.email && (
-                  <Button variant="outline" size="sm" onClick={() => setShowCompose(true)} className="gap-1.5">
-                    <Send className="w-3.5 h-3.5" />
-                    Email
-                  </Button>
-                )}
                 <Button variant="outline" size="sm" onClick={() => setShowAddActivity(true)}>
                   <Plus className="w-3.5 h-3.5" />
                   Activity
@@ -333,15 +325,6 @@ export default function ContactDetailPage() {
         open={showAddActivity}
         onClose={() => setShowAddActivity(false)}
         prefillContactId={person.id}
-      />
-
-      <ComposeEmailDialog
-        open={showCompose}
-        onClose={() => setShowCompose(false)}
-        prefillTo={person.email ?? ''}
-        contactName={person.name}
-        contactId={person.id}
-        companyId={person.companyId ?? undefined}
       />
     </div>
   )

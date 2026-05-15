@@ -3,11 +3,10 @@ import { useMemo, useState, useCallback } from 'react'
 import { useCrm } from '../../platform/CrmPlatformProvider'
 import { Badge, Button, Input, DatePicker } from '../../components/ui'
 import { AddActivityDialog } from '../../components/AddActivityDialog'
-import { ComposeEmailDialog } from '../../components/ComposeEmailDialog'
 import {
   ArrowLeft, Building2, CircleDollarSign, Calendar, Users,
   Clock, FileText, Pencil, Check, X, Trash2, Plus, Phone,
-  Mail, Trophy, XCircle, AlertTriangle, ChevronRight, Send,
+  Mail, Trophy, XCircle, AlertTriangle, ChevronRight,
 } from 'lucide-react'
 
 function formatCurrency(amount: number): string {
@@ -44,7 +43,6 @@ export default function DealDetailPage() {
   const [editValue, setEditValue] = useState('')
   const [showAddActivity, setShowAddActivity] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
-  const [emailTarget, setEmailTarget] = useState<{ email: string; name: string; contactId: string } | null>(null)
 
   const deal = useMemo(() => deals.find(d => d.id === id), [deals, id])
   const company = useMemo(() => deal?.companyId ? companies.find(c => c.id === deal.companyId) : null, [deal, companies])
@@ -269,19 +267,6 @@ export default function DealDetailPage() {
                       <span className="text-sm text-muted-foreground">Unknown contact</span>
                     )}
                     <div className="flex items-center gap-2">
-                      {lc.person?.email && (
-                        <button
-                          onClick={() => setEmailTarget({
-                            email: lc.person!.email!,
-                            name: lc.person!.name,
-                            contactId: lc.person!.id,
-                          })}
-                          className="p-1 rounded text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
-                          title={`Email ${lc.person.name}`}
-                        >
-                          <Send className="w-3.5 h-3.5" />
-                        </button>
-                      )}
                       <Badge variant="secondary" className="text-[10px] capitalize">{lc.role.replace('_', ' ')}</Badge>
                     </div>
                   </div>
@@ -394,16 +379,6 @@ export default function DealDetailPage() {
         open={showAddActivity}
         onClose={() => setShowAddActivity(false)}
         prefillDealId={deal.id}
-      />
-
-      <ComposeEmailDialog
-        open={!!emailTarget}
-        onClose={() => setEmailTarget(null)}
-        prefillTo={emailTarget?.email}
-        contactName={emailTarget?.name}
-        contactId={emailTarget?.contactId}
-        dealId={deal.id}
-        companyId={deal.companyId ?? undefined}
       />
     </div>
   )

@@ -1,15 +1,14 @@
 import { useState, useMemo, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth, AuthOverlay } from 'deepspace'
-import { useCrm } from '../platform/CrmPlatformProvider'
-import { Button, Badge } from '../components/ui'
-import { AddContactDialog } from '../components/AddContactDialog'
-import { ComposeEmailDialog } from '../components/ComposeEmailDialog'
+import { useCrm } from '../../platform/CrmPlatformProvider'
+import { Button, Badge } from '../../components/ui'
+import { AddContactDialog } from '../../components/AddContactDialog'
 import {
   Plus, Search, Building2, Mail, Phone, Calendar,
-  Users, Filter, ArrowUpDown, ChevronRight, Send,
+  Users, Filter, ArrowUpDown, ChevronRight,
 } from 'lucide-react'
-import type { Person } from '../platform/types'
+import type { Person } from '../../platform/types'
 
 function timeAgo(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime()
@@ -49,7 +48,6 @@ export default function ContactsPage() {
   const [showAuth, setShowAuth] = useState(false)
   const handleAdd = () => (isSignedIn ? setShowAdd(true) : setShowAuth(true))
   const [sortBy, setSortBy] = useState<'name' | 'recent' | 'company'>('name')
-  const [emailTarget, setEmailTarget] = useState<{ email: string; name: string; id: string; companyId?: string } | null>(null)
 
   const companyMap = useMemo(() => {
     const map: Record<string, string> = {}
@@ -235,24 +233,6 @@ export default function ContactsPage() {
 
                 {/* Meta */}
                 <div className="flex items-center gap-4 flex-shrink-0">
-                  {person.email && (
-                    <button
-                      onClick={(e) => {
-                        e.preventDefault()
-                        e.stopPropagation()
-                        setEmailTarget({
-                          email: person.email!,
-                          name: person.name,
-                          id: person.id,
-                          companyId: person.companyId ?? undefined,
-                        })
-                      }}
-                      className="p-1 rounded text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors hidden lg:block"
-                      title={`Email ${person.name}`}
-                    >
-                      <Send className="w-3.5 h-3.5" />
-                    </button>
-                  )}
                   {dealCount > 0 && (
                     <span className="text-xs text-muted-foreground">{dealCount} deal{dealCount > 1 ? 's' : ''}</span>
                   )}
@@ -275,15 +255,6 @@ export default function ContactsPage() {
 
       <AddContactDialog open={showAdd} onClose={() => setShowAdd(false)} />
       {showAuth && <AuthOverlay onClose={() => setShowAuth(false)} />}
-
-      <ComposeEmailDialog
-        open={!!emailTarget}
-        onClose={() => setEmailTarget(null)}
-        prefillTo={emailTarget?.email}
-        contactName={emailTarget?.name}
-        contactId={emailTarget?.id}
-        companyId={emailTarget?.companyId}
-      />
     </div>
   )
 }

@@ -2,11 +2,10 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useMemo, useState, useCallback } from 'react'
 import { useCrm } from '../../platform/CrmPlatformProvider'
 import { Badge, Button, Input } from '../../components/ui'
-import { ComposeEmailDialog } from '../../components/ComposeEmailDialog'
 import {
   ArrowLeft, Building2, Users, CircleDollarSign, Globe,
   MapPin, FileText, Clock, Pencil, Check, X, Trash2, Plus,
-  Phone, Mail, Calendar, Send,
+  Phone, Mail, Calendar,
 } from 'lucide-react'
 
 function formatCurrency(amount: number): string {
@@ -39,7 +38,6 @@ export default function CompanyDetailPage() {
   const [editing, setEditing] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
-  const [emailTarget, setEmailTarget] = useState<{ email: string; name: string; contactId: string } | null>(null)
 
   const company = useMemo(() => companies.find(c => c.id === id), [companies, id])
   const companyPeople = useMemo(() => people.filter(p => p.companyId === id), [people, id])
@@ -161,15 +159,6 @@ export default function CompanyDetailPage() {
                       </div>
                     </Link>
                     <div className="flex items-center gap-2 flex-shrink-0">
-                      {p.email && (
-                        <button
-                          onClick={() => setEmailTarget({ email: p.email!, name: p.name, contactId: p.id })}
-                          className="p-1 rounded text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
-                          title={`Email ${p.name}`}
-                        >
-                          <Send className="w-3.5 h-3.5" />
-                        </button>
-                      )}
                       <span className="text-xs text-muted-foreground hidden lg:block">{p.email ?? ''}</span>
                     </div>
                   </div>
@@ -289,15 +278,6 @@ export default function CompanyDetailPage() {
           </div>
         </div>
       </div>
-
-      <ComposeEmailDialog
-        open={!!emailTarget}
-        onClose={() => setEmailTarget(null)}
-        prefillTo={emailTarget?.email}
-        contactName={emailTarget?.name}
-        contactId={emailTarget?.contactId}
-        companyId={company.id}
-      />
     </div>
   )
 }
