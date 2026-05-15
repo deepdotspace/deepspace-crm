@@ -19,7 +19,11 @@ export default function Navigation() {
   const userRole = (user?.role ?? 'anonymous') as Role | 'anonymous'
   const roleConfig = ROLE_CONFIG[userRole as Role] ?? { title: 'Anonymous', badgeVariant: 'secondary' }
 
-  useEffect(() => { setMobileMenuOpen(false) }, [location.pathname])
+  // Close any open menus when navigating
+  useEffect(() => {
+    setMobileMenuOpen(false)
+    setUserMenuOpen(false)
+  }, [location.pathname])
 
   const visibleNav = nav.filter((item) => {
     if (!item.roles) return true

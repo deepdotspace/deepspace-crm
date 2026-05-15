@@ -1,23 +1,25 @@
-import { test, expect } from '@playwright/test'
-import { createTestUsers } from './helpers/auth'
+/**
+ * Multi-user collaboration spec — verifies two users sign in into
+ * separate browser contexts and the app distinguishes them.
+ *
+ * Pre-create the test accounts once (counted against your 10-cap):
+ *   npx deepspace test-accounts create --email collab-a@deepspace.test --password TestPass123! --name "Collab A"
+ *   npx deepspace test-accounts create --email collab-b@deepspace.test --password TestPass123! --name "Collab B"
+ *
+ * The `users` fixture handles sign-in caching (per-account storageState
+ * persisted to `~/.deepspace/playwright-states/`), context creation, and
+ * cleanup. No need to manage browser contexts manually.
+ */
+import { test, expect } from 'deepspace/testing'
 
-async function waitForApp(page: import('@playwright/test').Page) {
-  await page.waitForSelector('[data-testid="app-navigation"]', { timeout: 15000 })
-}
+test('two users render with their own names', async ({ users }) => {
+  const [a, b] = await users(['Collab A', 'Collab B'])
 
-test.describe('Multi-user collaboration', () => {
-  test('two users are recognized as different users', async ({ browser }) => {
-    const users = await createTestUsers(browser, 2)
+  await Promise.all([a.page.goto('/'), b.page.goto('/')])
 
-    try {
-      await waitForApp(users[0].page)
-      await waitForApp(users[1].page)
+  await expect(a.page.getByTestId('app-navigation')).toBeVisible({ timeout: 15_000 })
+  await expect(b.page.getByTestId('app-navigation')).toBeVisible({ timeout: 15_000 })
 
-      // Both should show signed-in state with their names
-      await expect(users[0].page.getByTestId('nav-user-name')).toContainText('User 1')
-      await expect(users[1].page.getByTestId('nav-user-name')).toContainText('User 2')
-    } finally {
-      for (const u of users) await u.context.close()
-    }
-  })
+  await expect(a.page.getByTestId('nav-user-name')).toContainText('Collab A')
+  await expect(b.page.getByTestId('nav-user-name')).toContainText('Collab B')
 })
