@@ -21,7 +21,11 @@ export const companiesSchema: CollectionSchema = {
   ],
   ownerField: 'OwnerId',
   permissions: {
-    '*': { read: true, create: true, update: true, delete: false },
+    // Per-user CRM rooms: the room owner is the user themselves
+    // (derived from the per-user roomId in worker.ts AppRecordRoom).
+    // Only the owner has access; other roles, including anonymous,
+    // are implicitly denied because no '*' wildcard is set.
+    owner: { read: true, create: true, update: true, delete: true },
     admin: { read: true, create: true, update: true, delete: true },
   },
 }
@@ -44,7 +48,11 @@ export const dealsSchema: CollectionSchema = {
   ],
   ownerField: 'OwnerId',
   permissions: {
-    '*': { read: true, create: true, update: true, delete: false },
+    // Per-user CRM rooms: the room owner is the user themselves
+    // (derived from the per-user roomId in worker.ts AppRecordRoom).
+    // Only the owner has access; other roles, including anonymous,
+    // are implicitly denied because no '*' wildcard is set.
+    owner: { read: true, create: true, update: true, delete: true },
     admin: { read: true, create: true, update: true, delete: true },
   },
 }
@@ -58,7 +66,11 @@ export const pipelineStagesSchema: CollectionSchema = {
     { name: 'DefaultProbability', storage: 'number', interpretation: { kind: 'percent', decimals: 0 } },
   ],
   permissions: {
-    '*': { read: true, create: true, update: true, delete: false },
+    // Per-user CRM rooms: the room owner is the user themselves
+    // (derived from the per-user roomId in worker.ts AppRecordRoom).
+    // Only the owner has access; other roles, including anonymous,
+    // are implicitly denied because no '*' wildcard is set.
+    owner: { read: true, create: true, update: true, delete: true },
     admin: { read: true, create: true, update: true, delete: true },
   },
 }
@@ -81,7 +93,11 @@ export const activitiesSchema: CollectionSchema = {
   ],
   ownerField: 'OwnerId',
   permissions: {
-    '*': { read: true, create: true, update: true, delete: false },
+    // Per-user CRM rooms: the room owner is the user themselves
+    // (derived from the per-user roomId in worker.ts AppRecordRoom).
+    // Only the owner has access; other roles, including anonymous,
+    // are implicitly denied because no '*' wildcard is set.
+    owner: { read: true, create: true, update: true, delete: true },
     admin: { read: true, create: true, update: true, delete: true },
   },
 }
@@ -94,7 +110,8 @@ export const dealContactsSchema: CollectionSchema = {
     { name: 'Role', storage: 'text', interpretation: { kind: 'select', options: ['decision_maker', 'influencer', 'champion', 'blocker', 'user'] } },
   ],
   permissions: {
-    '*': { read: true, create: true, update: true, delete: true },
+    // Same model as the other CRM collections — owner-only.
+    owner: { read: true, create: true, update: true, delete: true },
     admin: { read: true, create: true, update: true, delete: true },
   },
 }
@@ -113,7 +130,11 @@ export const peopleSchema: CollectionSchema = {
     { name: 'Metadata', storage: 'text', interpretation: 'plain' },
   ],
   permissions: {
-    '*': { read: true, create: true, update: true, delete: false },
+    // Per-user CRM rooms: the room owner is the user themselves
+    // (derived from the per-user roomId in worker.ts AppRecordRoom).
+    // Only the owner has access; other roles, including anonymous,
+    // are implicitly denied because no '*' wildcard is set.
+    owner: { read: true, create: true, update: true, delete: true },
     admin: { read: true, create: true, update: true, delete: true },
   },
 }

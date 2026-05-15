@@ -44,7 +44,18 @@ export const __DO_MANIFEST__ = [
 
 export class AppRecordRoom extends RecordRoom<Env> {
   constructor(state: DurableObjectState, env: Env) {
-    super(state, env, schemas, { ownerUserId: env.OWNER_USER_ID })
+    // Per-user CRM rooms are named `app:<APP_NAME>:user:<userId>`.
+    // For those, the room owner is the user whose data lives in this
+    // DO instance — that's how schema-level `owner: { ... }` permissions
+    // work out to "only this user can access their own CRM".
+    //
+    // Any other room name (legacy single-room app, or future shared
+    // workspace/dir/conv scopes) falls back to env.OWNER_USER_ID, the
+    // app owner, matching the original scaffold behavior.
+    const name = state.id.name ?? ''
+    const perUser = /^app:[^:]+:user:(.+)$/.exec(name)
+    const ownerUserId = perUser?.[1] ?? env.OWNER_USER_ID
+    super(state, env, schemas, { ownerUserId })
   }
 }
 
@@ -123,7 +134,46 @@ export type AppContext = { Bindings: Env }
 // =============================================================================
 
 const app = new Hono<AppContext>()
-app.use('/api/*', cors())
+
+// CORS — same-origin in production. The CRM SPA, its API, and its
+// WebSocket all live under the same origin (e.g. `crm.deep.space` or
+// `<name>.app.space`), so we don't actually *need* CORS at all in
+// prod. The allowlist exists for two reasons:
+//   1. Local dev — Vite serves on http://localhost:5173 while the
+//      worker runs on a different port; the CLI rewrites requests
+//      via the proxy, but a couple of debug surfaces benefit from an
+//      explicit localhost allowance.
+//   2. Custom-domain deploys — if the user attaches a custom domain
+//      via `deepspace domain attach`, requests originate from there.
+//
+// Wildcard `Access-Control-Allow-Origin: *` would let any third-party
+// site issue authenticated requests against this worker (CSRF surface
+// on top of whatever XSS exposure exists elsewhere). The function
+// form below evaluates the request's Origin and returns either the
+// matched origin or null (= block).
+app.use('/api/*', cors({
+  origin: (origin) => {
+    if (!origin) return null
+    // Same-origin / curl etc. (no Origin header) → null is safe.
+    // Browsers omit Origin for top-level navigations and same-origin.
+    const u = (() => { try { return new URL(origin) } catch { return null } })()
+    if (!u) return null
+    // Allow http://localhost:* for `deepspace dev`.
+    if (u.hostname === 'localhost' || u.hostname === '127.0.0.1') {
+      return origin
+    }
+    // Allow the deployed app's own subdomain (and any future custom
+    // domain pointed at this worker — same trust boundary).
+    if (u.hostname.endsWith('.app.space') || u.hostname.endsWith('.deep.space')) {
+      return origin
+    }
+    return null
+  },
+  credentials: true,
+  allowHeaders: ['Authorization', 'Content-Type', 'X-Requested-With'],
+  allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  maxAge: 600,
+}))
 
 // ---------------------------------------------------------------------------
 // Auth

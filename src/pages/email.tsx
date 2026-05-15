@@ -31,6 +31,7 @@
  */
 
 import { useEffect, useState, useCallback } from 'react'
+import DOMPurify from 'dompurify'
 import { integration, useAuth, getAuthToken } from 'deepspace'
 import {
   Mail, ExternalLink, RefreshCw, Plug, Unplug, Search, Inbox,
@@ -716,24 +717,49 @@ function decodeBodyData(data: string | undefined): string | null {
   }
 }
 
-// Strip the obvious XSS vectors. This is intentionally a denylist of the
-// most common dangerous tags / attrs — *not* a full HTML sanitizer. Email
-// bodies coming through gmail.readonly originate from arbitrary senders,
-// so any inline JS / event handlers / object embeds are treated as hostile.
-// Real email clients use a full sanitizer (DOMPurify); add it if this tab
-// graduates to a primary inbox UX.
+// Sanitize email HTML with DOMPurify (allowlist-based, parses through a
+// real DOM rather than regex over a string). Email bodies come from
+// arbitrary senders via gmail.readonly, so they're treated as hostile.
+//
+// Hardening on top of DOMPurify defaults:
+//   - FORBID_TAGS adds <style>, <iframe>, <form>, <object>, <embed>,
+//     <link>, <meta>, <base>, <img>. <base> would let a sender rewrite
+//     every relative URL in the email; <form> would let them exfil
+//     submitted data cross-origin; <img> would render tracking pixels
+//     that leak the user's IP and read-time to the sender (real Gmail
+//     proxies images via googleusercontent for the same reason). If
+//     you ever decide to render images, drop 'img' from this list and
+//     consider proxying instead.
+//   - FORBID_ATTR strips inline `style` attributes, which can leak
+//     data via background-image:url(evil/track?cookie=...). The
+//     trade-off is uglier rendering — sender brand colors no longer
+//     apply. Acceptable for a read-only inbox view.
+//   - ALLOW_DATA_ATTR off — no data-* attributes either.
+//   - ADD_ATTR sets target="_blank" + rel="noopener noreferrer" on
+//     anchor tags so links open in a new tab without window.opener
+//     leaking back to the sender.
+//
+// DOMPurify's allowlist (vs our previous regex denylist) means new
+// attack vectors discovered in the future are blocked by default — we
+// don't have to keep adding regex rules.
 function sanitizeEmailHtml(html: string): string {
-  return (
-    html
-      // Drop <script>, <style>, <iframe>, <object>, <embed>, <link>, <meta>.
-      .replace(/<\s*(script|style|iframe|object|embed|link|meta)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, '')
-      .replace(/<\s*(script|style|iframe|object|embed|link|meta)[^>]*\/?>/gi, '')
-      // Strip on*=... event handlers from any tag.
-      .replace(/\son[a-z]+\s*=\s*"[^"]*"/gi, '')
-      .replace(/\son[a-z]+\s*=\s*'[^']*'/gi, '')
-      .replace(/\son[a-z]+\s*=\s*[^\s>]+/gi, '')
-      // Strip javascript: URLs in href / src.
-      .replace(/(href|src)\s*=\s*"javascript:[^"]*"/gi, '$1="#"')
-      .replace(/(href|src)\s*=\s*'javascript:[^']*'/gi, "$1='#'")
-  )
+  // Force-add target/rel on <a> tags via DOMPurify hook.
+  DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+    if (node.nodeName === 'A') {
+      node.setAttribute('target', '_blank')
+      node.setAttribute('rel', 'noopener noreferrer nofollow')
+    }
+  })
+  const clean = DOMPurify.sanitize(html, {
+    USE_PROFILES: { html: true },
+    FORBID_TAGS: [
+      'style', 'iframe', 'form', 'object', 'embed', 'link', 'meta', 'base', 'img',
+    ],
+    FORBID_ATTR: ['style'],
+    ALLOW_DATA_ATTR: false,
+    KEEP_CONTENT: true,
+  })
+  // Reset hooks so they don't leak across calls / pages.
+  DOMPurify.removeAllHooks()
+  return clean
 }
