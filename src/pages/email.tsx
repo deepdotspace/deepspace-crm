@@ -34,6 +34,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { integration, useAuth, getAuthToken } from 'deepspace'
 import {
   Mail, ExternalLink, RefreshCw, Plug, Unplug, Search, Inbox,
+  ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import { Button } from '../components/ui'
 
@@ -88,6 +89,22 @@ export default function EmailPage() {
   const [search, setSearch] = useState('')
   const [statusBump, setStatusBump] = useState(0)
 
+  // Pagination state — modeled on Gmail's "1-50 of 1,091 [<] [>]" UI.
+  //
+  // The Gmail REST API only returns a forward token (`nextPageToken`);
+  // there's no native way to go back. We therefore keep a stack of the
+  // tokens we used to land on each page. `tokensVisited[i]` is the
+  // pageToken we sent to fetch page i (null for page 0). To go back,
+  // we re-fetch with the previous entry in the stack.
+  const [tokensVisited, setTokensVisited] = useState<(string | null)[]>([null])
+  const [currentPageIndex, setCurrentPageIndex] = useState(0)
+  // Returned by the latest response. Null = we're on the final page.
+  const [nextPageToken, setNextPageToken] = useState<string | null>(null)
+  // Server's estimate of total matches. Gmail returns this with every
+  // list call; the value can fluctuate slightly between pages (it is an
+  // estimate, not a count) — same behavior as mail.google.com.
+  const [resultSizeEstimate, setResultSizeEstimate] = useState<number | null>(null)
+
   // ── status ──
   useEffect(() => {
     if (!isSignedIn) {
@@ -120,59 +137,112 @@ export default function EmailPage() {
 
   const refreshStatus = useCallback(() => setStatusBump((n) => n + 1), [])
 
-  // ── fetch messages ──
+  // ── fetch a single page ──
   //
-  // `google/gmail-inbox` is the combined list+hydrate endpoint added in
-  // the SDK so apps don't have to N+1 in the browser. One client request →
+  // `google/gmail-inbox` is the combined list+hydrate endpoint in the
+  // SDK so apps don't have to N+1 in the browser. One client request →
   // one proxy rate-limit charge → server-side parallel hydrate against
   // Google → rich messages with headers + body parts in one response.
   // `format: 'full'` includes the body so we can render the message text.
-  const fetchMessages = useCallback(async () => {
-    setLoadingMessages(true)
-    setError(null)
-    try {
-      const result = await integration.post('google/gmail-inbox', {
-        maxResults: PAGE_SIZE,
-        labelIds: ['INBOX'],
-        format: 'full',
-      })
+  //
+  // Each call replaces the visible list (Gmail-style pagination, not
+  // infinite scroll). The page token is supplied by the navigation
+  // helpers below; this function itself doesn't know what page it's on.
+  const fetchPage = useCallback(
+    async (pageToken: string | null) => {
+      setLoadingMessages(true)
+      setError(null)
+      try {
+        const params: Record<string, unknown> = {
+          maxResults: PAGE_SIZE,
+          labelIds: ['INBOX'],
+          format: 'full',
+        }
+        if (pageToken) params.pageToken = pageToken
 
-      if (!result.success) {
-        setError(result.error ?? 'Gmail request failed')
-        return
-      }
+        const result = await integration.post('google/gmail-inbox', params)
 
-      const payload = ((result.data ?? result) as unknown) as InboxPayload
-      if (payload?.requiresOAuth && typeof payload.authUrl === 'string') {
-        const popup = window.open(payload.authUrl, 'google-auth', 'width=500,height=600')
-        if (!popup) {
-          window.location.href = payload.authUrl
+        if (!result.success) {
+          setError(result.error ?? 'Gmail request failed')
           return
         }
-        const interval = setInterval(() => {
-          if (popup.closed) {
-            clearInterval(interval)
-            refreshStatus()
-            void fetchMessages()
-          }
-        }, 500)
-        return
-      }
 
-      setMessages(payload.messages ?? [])
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setLoadingMessages(false)
-    }
-  }, [refreshStatus])
+        const payload = ((result.data ?? result) as unknown) as InboxPayload
+        if (payload?.requiresOAuth && typeof payload.authUrl === 'string') {
+          const popup = window.open(payload.authUrl, 'google-auth', 'width=500,height=600')
+          if (!popup) {
+            window.location.href = payload.authUrl
+            return
+          }
+          const interval = setInterval(() => {
+            if (popup.closed) {
+              clearInterval(interval)
+              refreshStatus()
+              void fetchPage(null)
+            }
+          }, 500)
+          return
+        }
+
+        setMessages(payload.messages ?? [])
+        setNextPageToken(payload.nextPageToken ?? null)
+        if (typeof payload.resultSizeEstimate === 'number') {
+          setResultSizeEstimate(payload.resultSizeEstimate)
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err))
+      } finally {
+        setLoadingMessages(false)
+      }
+    },
+    [refreshStatus],
+  )
+
+  // Refresh = re-fetch current page, keep history intact.
+  const refreshCurrentPage = useCallback(() => {
+    void fetchPage(tokensVisited[currentPageIndex] ?? null)
+  }, [fetchPage, tokensVisited, currentPageIndex])
+
+  // Forward — uses the nextPageToken from the latest response, pushes
+  // it onto the visited stack, and bumps the index. Idempotent on the
+  // last page (nextPageToken null → button disabled, but defensive).
+  const goToNextPage = useCallback(() => {
+    if (!nextPageToken) return
+    const tokenForNextPage = nextPageToken
+    setTokensVisited((prev) => {
+      // If we already have an entry at currentPageIndex+1 (user hit
+      // back, then forward), keep it consistent rather than appending.
+      const next = prev.slice(0, currentPageIndex + 1)
+      next.push(tokenForNextPage)
+      return next
+    })
+    setCurrentPageIndex((i) => i + 1)
+    void fetchPage(tokenForNextPage)
+  }, [nextPageToken, currentPageIndex, fetchPage])
+
+  // Back — re-fetch with the previously-saved page token (which may be
+  // null = page 0). Disabled at page 0.
+  const goToPrevPage = useCallback(() => {
+    if (currentPageIndex === 0) return
+    const targetIndex = currentPageIndex - 1
+    setCurrentPageIndex(targetIndex)
+    void fetchPage(tokensVisited[targetIndex] ?? null)
+  }, [currentPageIndex, tokensVisited, fetchPage])
+
+  // First page reset — used after disconnect/reconnect and on initial
+  // load. Wipes pagination history.
+  const resetToFirstPage = useCallback(() => {
+    setTokensVisited([null])
+    setCurrentPageIndex(0)
+    void fetchPage(null)
+  }, [fetchPage])
 
   // Auto-load once gmail.readonly is granted.
   useEffect(() => {
     if (status.gmailRead && messages === null && !loadingMessages) {
-      void fetchMessages()
+      resetToFirstPage()
     }
-  }, [status.gmailRead, messages, loadingMessages, fetchMessages])
+  }, [status.gmailRead, messages, loadingMessages, resetToFirstPage])
 
   // ── disconnect ──
   const onDisconnect = useCallback(async () => {
@@ -184,6 +254,10 @@ export default function EmailPage() {
         headers: await authHeaders(),
       })
       setMessages(null)
+      setTokensVisited([null])
+      setCurrentPageIndex(0)
+      setNextPageToken(null)
+      setResultSizeEstimate(null)
       refreshStatus()
     } finally {
       setLoadingMessages(false)
@@ -226,7 +300,7 @@ export default function EmailPage() {
               <Button
                 size="sm"
                 variant="outline"
-                onClick={fetchMessages}
+                onClick={refreshCurrentPage}
                 disabled={loadingMessages}
                 className="gap-1.5"
               >
@@ -276,7 +350,7 @@ export default function EmailPage() {
             Grant read-only access to your Gmail inbox. We never send, modify,
             or delete messages — read-only means read-only.
           </p>
-          <Button onClick={fetchMessages} disabled={loadingMessages} className="gap-2">
+          <Button onClick={resetToFirstPage} disabled={loadingMessages} className="gap-2">
             <Plug className="w-4 h-4" />
             {loadingMessages ? 'Opening Google…' : 'Connect Gmail'}
           </Button>
@@ -323,6 +397,40 @@ export default function EmailPage() {
         </div>
       )}
 
+      {/* Pagination — mirrors mail.google.com's "1-50 of 1,091  <  >".
+          Hidden during in-memory search (search only filters the
+          currently-loaded page; pagination would silently change the
+          set the filter is operating against). For full-mailbox search
+          switch to the google/gmail-search endpoint. */}
+      {status.gmailRead &&
+        messages !== null &&
+        messages.length > 0 &&
+        !search && (
+          <div className="mt-4 flex items-center justify-end gap-3 text-sm text-muted-foreground">
+            <span>
+              {formatPageRange(currentPageIndex, messages.length, resultSizeEstimate)}
+            </span>
+            <button
+              type="button"
+              onClick={goToPrevPage}
+              disabled={loadingMessages || currentPageIndex === 0}
+              aria-label="Newer"
+              className="inline-flex items-center justify-center rounded-md p-1.5 hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={goToNextPage}
+              disabled={loadingMessages || !nextPageToken}
+              aria-label="Older"
+              className="inline-flex items-center justify-center rounded-md p-1.5 hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
       {status.gmailRead && messages === null && (
         <div className="bg-card border border-border rounded-xl py-16 text-center text-sm text-muted-foreground">
           Loading messages…
@@ -340,6 +448,10 @@ function MessageRow({ message }: { message: GmailMessage }) {
   const subject = get('Subject') ?? '(no subject)'
   const dateStr = formatDate(message.internalDate)
   const threadUrl = `https://mail.google.com/mail/u/0/#inbox/${message.threadId ?? message.id}`
+  // Snippets ship HTML-encoded (`&#39;`, `&amp;`, …). React renders text
+  // literally so we must decode before display, otherwise users see the
+  // raw entities.
+  const decodedSnippet = message.snippet ? decodeHtmlEntities(message.snippet) : ''
   const body = open ? extractBody(message.payload) : null
 
   return (
@@ -360,24 +472,54 @@ function MessageRow({ message }: { message: GmailMessage }) {
             </span>
             <span className="text-xs text-muted-foreground flex-shrink-0">{dateStr}</span>
           </div>
-          <div className="text-sm text-foreground truncate mt-0.5">{subject}</div>
-          {!open && message.snippet && (
-            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{message.snippet}</p>
+          <div className="text-sm text-foreground truncate mt-0.5">
+            {decodeHtmlEntities(subject)}
+          </div>
+          {!open && decodedSnippet && (
+            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{decodedSnippet}</p>
           )}
         </button>
 
         {open && body && (
-          <div className="mt-3 rounded-md border border-border bg-background/40 p-3 text-sm">
+          // Render in a "white envelope" container so sender-supplied
+          // inline colors (which assume a white inbox background, like
+          // mail.google.com) display correctly even in dark mode. The
+          // `color: #111` baseline gives unstyled text a readable
+          // default; senders that override it (most do, with their own
+          // brand colors) get exactly what they intended.
+          <div
+            className="mt-3 rounded-md border border-border overflow-hidden"
+            style={{ colorScheme: 'light' }}
+          >
             {body.kind === 'html' ? (
               <div
-                className="email-html prose prose-sm max-w-none break-words"
+                className="email-html"
+                style={{
+                  background: '#ffffff',
+                  color: '#111111',
+                  padding: '16px',
+                  fontSize: '14px',
+                  lineHeight: 1.5,
+                  wordBreak: 'break-word',
+                  overflowWrap: 'anywhere',
+                }}
                 // We sanitize before render. The HTML payload comes from
-                // Google but originated from arbitrary senders, so it must
-                // be treated as untrusted.
+                // Google but originated from arbitrary senders, so it
+                // must be treated as untrusted.
                 dangerouslySetInnerHTML={{ __html: body.value }}
               />
             ) : (
-              <pre className="whitespace-pre-wrap break-words font-sans text-sm text-foreground">
+              <pre
+                className="whitespace-pre-wrap break-words font-sans"
+                style={{
+                  background: '#ffffff',
+                  color: '#111111',
+                  padding: '16px',
+                  fontSize: '14px',
+                  lineHeight: 1.5,
+                  margin: 0,
+                }}
+              >
                 {body.value}
               </pre>
             )}
@@ -430,6 +572,29 @@ function formatDate(internalMs?: string): string {
   })
 }
 
+// "1–50 of 1,091" / "51–100 of 1,091" / "1051–1091 of 1,091".
+//
+// Caveats matching mail.google.com behavior:
+//   - resultSizeEstimate is the server's *estimate* and can fluctuate
+//     between page fetches by a few entries. We display whatever the
+//     latest response said.
+//   - When estimate is missing (very rare; happens when Gmail's index
+//     is rebuilding), fall back to "X-Y" without the "of Z" suffix.
+function formatPageRange(
+  pageIndex: number,
+  pageMessageCount: number,
+  total: number | null,
+): string {
+  const start = pageIndex * PAGE_SIZE + 1
+  const end = start + pageMessageCount - 1
+  // U+2013 EN DASH matches Gmail's typography.
+  const range = `${start.toLocaleString()}\u2013${end.toLocaleString()}`
+  if (typeof total === 'number') {
+    return `${range} of ${total.toLocaleString()}`
+  }
+  return range
+}
+
 function filterMessages(messages: GmailMessage[], q: string): GmailMessage[] {
   if (!q.trim()) return messages
   const needle = q.toLowerCase()
@@ -437,12 +602,30 @@ function filterMessages(messages: GmailMessage[], q: string): GmailMessage[] {
     const headers = m.payload?.headers ?? []
     const from = headers.find((h) => h.name?.toLowerCase() === 'from')?.value ?? ''
     const subject = headers.find((h) => h.name?.toLowerCase() === 'subject')?.value ?? ''
+    // Decode entities so a search for "don't" matches a snippet that
+    // contains "don&#39;t".
     return (
-      from.toLowerCase().includes(needle) ||
-      subject.toLowerCase().includes(needle) ||
-      (m.snippet ?? '').toLowerCase().includes(needle)
+      decodeHtmlEntities(from).toLowerCase().includes(needle) ||
+      decodeHtmlEntities(subject).toLowerCase().includes(needle) ||
+      decodeHtmlEntities(m.snippet ?? '').toLowerCase().includes(needle)
     )
   })
+}
+
+// Decode the HTML entities Gmail puts in `snippet` and message-header
+// values (`&#39;`, `&amp;`, `&quot;`, `&#x27;`, etc.). React renders
+// strings literally, so without this users see the raw entity codes.
+//
+// We use the browser DOM as the decoder so every named entity is
+// supported (`&hellip;`, `&mdash;`, `&copy;`, etc.) without us
+// maintaining a table. SSR doesn't apply here — this page is
+// client-only after hydration — so DOMParser is always available when
+// this runs.
+function decodeHtmlEntities(s: string): string {
+  if (!s || (s.indexOf('&') === -1 && s.indexOf('\\u') === -1)) return s
+  const ta = document.createElement('textarea')
+  ta.innerHTML = s
+  return ta.value
 }
 
 // ============================================================================
