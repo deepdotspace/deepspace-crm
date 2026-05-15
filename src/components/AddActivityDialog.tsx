@@ -79,11 +79,11 @@ export function AddActivityDialog({ open, onClose, prefillContactId, prefillDeal
           </div>
           <div>
             <Label>Title *</Label>
-            <Input data-testid="activity-title-input" value={title} onChange={e => setTitle(e.target.value)} placeholder="Follow-up call" required autoFocus />
+            <Input data-testid="activity-title-input" value={title} onChange={e => setTitle(e.target.value)} placeholder="Follow-up call" required autoFocus maxLength={200} />
           </div>
           <div>
             <Label>Description</Label>
-            <Textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="Details..." rows={3} />
+            <Textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="Details..." rows={3} maxLength={5000} />
           </div>
           {type === 'task' && (
             <div>

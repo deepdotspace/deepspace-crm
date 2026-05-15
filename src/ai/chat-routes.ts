@@ -65,6 +65,13 @@ function deriveTitle(content: string): string {
   return first.length <= 50 ? first : first.slice(0, 47).trimEnd() + '…'
 }
 
+/** Redact a userId for logs — keep the last 4 chars so traces are still
+ *  correlatable without exposing the full identifier in worker logs. */
+function redactUserId(id: string): string {
+  if (id.length <= 4) return '****'
+  return `***${id.slice(-4)}`
+}
+
 export function registerAiChatRoutes(
   app: Hono<AppContext>,
   resolveAuth: ResolveAuth,
@@ -137,7 +144,7 @@ export function registerAiChatRoutes(
     const stub = recordRoomStub(c.env)
     const chat = await getChat(stub, chatId, auth.userId)
     if (!chat) {
-      console.warn('[ai-chat] REQUEST chat-not-found', { userId: auth.userId, chatId })
+      console.warn('[ai-chat] REQUEST chat-not-found', { userId: redactUserId(auth.userId), chatId })
       return c.json({ error: 'Chat not found' }, 404)
     }
 

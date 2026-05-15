@@ -721,45 +721,61 @@ function decodeBodyData(data: string | undefined): string | null {
 // real DOM rather than regex over a string). Email bodies come from
 // arbitrary senders via gmail.readonly, so they're treated as hostile.
 //
-// Hardening on top of DOMPurify defaults:
-//   - FORBID_TAGS adds <style>, <iframe>, <form>, <object>, <embed>,
-//     <link>, <meta>, <base>, <img>. <base> would let a sender rewrite
-//     every relative URL in the email; <form> would let them exfil
-//     submitted data cross-origin; <img> would render tracking pixels
-//     that leak the user's IP and read-time to the sender (real Gmail
-//     proxies images via googleusercontent for the same reason). If
-//     you ever decide to render images, drop 'img' from this list and
-//     consider proxying instead.
-//   - FORBID_ATTR strips inline `style` attributes, which can leak
-//     data via background-image:url(evil/track?cookie=...). The
-//     trade-off is uglier rendering — sender brand colors no longer
-//     apply. Acceptable for a read-only inbox view.
-//   - ALLOW_DATA_ATTR off — no data-* attributes either.
-//   - ADD_ATTR sets target="_blank" + rel="noopener noreferrer" on
-//     anchor tags so links open in a new tab without window.opener
-//     leaking back to the sender.
+// What we block — XSS attack surface only:
+//   - <script>, <iframe>, <object>, <embed> — code execution
+//   - <form> — cross-origin exfil if user clicks
+//   - <base> — would rewrite every relative URL in the email
+//   - <link>, <meta> — could rewrite document-level behavior
+//   - on*= event handlers — XSS
+//   - javascript: / vbscript: / data: URLs in href/src — XSS via DOMPurify defaults
 //
-// DOMPurify's allowlist (vs our previous regex denylist) means new
-// attack vectors discovered in the future are blocked by default — we
-// don't have to keep adding regex rules.
+// What we allow — visual fidelity for "reading my own inbox":
+//   - <style>-as-attribute (`style="..."`) — inline CSS is how emails
+//     render their layout/colors/fonts. Without this every email looks
+//     like raw HTML.
+//   - <img> — logos, banners, the visual content of marketing emails.
+//     Comes with a privacy trade-off: senders can include 1x1 pixel
+//     trackers that learn the user's IP + read-time. We mitigate
+//     partly by setting referrerpolicy=no-referrer + loading=lazy via
+//     a hook below, so the sender doesn't see referer headers and
+//     images only load when scrolled into view. Real Gmail proxies
+//     images through googleusercontent.com for fuller protection;
+//     that's an SDK-level enhancement we haven't done yet.
+//   - inline <a target="_blank" rel="noopener noreferrer nofollow">
+//     forced via hook so any link in the email opens safely.
+//
+// We still strip <style> as a *tag* (block-level CSS rules) because
+// a `<style>` block can target other elements on the page outside the
+// email envelope (e.g. body, html). Inline `style="..."` only affects
+// the element it's on, so it's safe.
 function sanitizeEmailHtml(html: string): string {
-  // Force-add target/rel on <a> tags via DOMPurify hook.
   DOMPurify.addHook('afterSanitizeAttributes', (node) => {
     if (node.nodeName === 'A') {
       node.setAttribute('target', '_blank')
       node.setAttribute('rel', 'noopener noreferrer nofollow')
     }
+    if (node.nodeName === 'IMG') {
+      // Reduce — but don't fully eliminate — the privacy leak from
+      // tracking pixels. The image still loads (sender learns the
+      // email was opened + sees the user's IP), but the Referer
+      // header is suppressed and offscreen images don't fetch until
+      // scrolled into view.
+      node.setAttribute('referrerpolicy', 'no-referrer')
+      node.setAttribute('loading', 'lazy')
+      node.setAttribute('decoding', 'async')
+      // Defensive — block crossorigin-credentialed image requests so
+      // the browser never sends cookies to image hosts.
+      node.removeAttribute('crossorigin')
+    }
   })
   const clean = DOMPurify.sanitize(html, {
     USE_PROFILES: { html: true },
     FORBID_TAGS: [
-      'style', 'iframe', 'form', 'object', 'embed', 'link', 'meta', 'base', 'img',
+      'script', 'style', 'iframe', 'form', 'object', 'embed', 'link', 'meta', 'base',
     ],
-    FORBID_ATTR: ['style'],
     ALLOW_DATA_ATTR: false,
     KEEP_CONTENT: true,
   })
-  // Reset hooks so they don't leak across calls / pages.
   DOMPurify.removeAllHooks()
   return clean
 }

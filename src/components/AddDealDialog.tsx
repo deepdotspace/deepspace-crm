@@ -55,7 +55,7 @@ export function AddDealDialog({ open, onClose }: Props) {
         <form onSubmit={handleSubmit} className="space-y-4 mt-2">
           <div>
             <Label>Deal Title *</Label>
-            <Input data-testid="deal-title-input" value={title} onChange={e => setTitle(e.target.value)} placeholder="Enterprise License" required autoFocus />
+            <Input data-testid="deal-title-input" value={title} onChange={e => setTitle(e.target.value)} placeholder="Enterprise License" required autoFocus maxLength={200} />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -81,7 +81,7 @@ export function AddDealDialog({ open, onClose }: Props) {
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label>Amount ($)</Label>
-              <Input value={amount} onChange={e => setAmount(e.target.value)} placeholder="50000" type="number" />
+              <Input value={amount} onChange={e => setAmount(e.target.value)} placeholder="50000" type="number" max={1e12} min={0} />
             </div>
             <div>
               <Label>Close Date</Label>

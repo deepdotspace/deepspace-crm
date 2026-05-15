@@ -53,20 +53,20 @@ export function AddContactDialog({ open, onClose }: Props) {
         <form onSubmit={handleSubmit} className="space-y-4 mt-2">
           <div>
             <Label>Name *</Label>
-            <Input data-testid="contact-name-input" value={name} onChange={e => setName(e.target.value)} placeholder="John Smith" required autoFocus />
+            <Input data-testid="contact-name-input" value={name} onChange={e => setName(e.target.value)} placeholder="John Smith" required autoFocus maxLength={200} />
           </div>
           <div>
             <Label>Email</Label>
-            <Input data-testid="contact-email-input" value={email} onChange={e => setEmail(e.target.value)} placeholder="john@example.com" type="email" />
+            <Input data-testid="contact-email-input" value={email} onChange={e => setEmail(e.target.value)} placeholder="john@example.com" type="email" maxLength={320} />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label>Job Title</Label>
-              <Input value={title} onChange={e => setTitle(e.target.value)} placeholder="VP of Sales" />
+              <Input value={title} onChange={e => setTitle(e.target.value)} placeholder="VP of Sales" maxLength={200} />
             </div>
             <div>
               <Label>Department</Label>
-              <Input value={department} onChange={e => setDepartment(e.target.value)} placeholder="Sales" />
+              <Input value={department} onChange={e => setDepartment(e.target.value)} placeholder="Sales" maxLength={200} />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3">

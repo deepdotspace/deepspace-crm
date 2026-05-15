@@ -49,16 +49,16 @@ export function AddCompanyDialog({ open, onClose }: Props) {
         <form onSubmit={handleSubmit} className="space-y-4 mt-2">
           <div>
             <Label>Company Name *</Label>
-            <Input data-testid="company-name-input" value={name} onChange={e => setName(e.target.value)} placeholder="Acme Corp" required autoFocus />
+            <Input data-testid="company-name-input" value={name} onChange={e => setName(e.target.value)} placeholder="Acme Corp" required autoFocus maxLength={200} />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label>Domain</Label>
-              <Input value={domain} onChange={e => setDomain(e.target.value)} placeholder="acme.com" />
+              <Input value={domain} onChange={e => setDomain(e.target.value)} placeholder="acme.com" maxLength={253} />
             </div>
             <div>
               <Label>Website</Label>
-              <Input value={website} onChange={e => setWebsite(e.target.value)} placeholder="https://acme.com" />
+              <Input value={website} onChange={e => setWebsite(e.target.value)} placeholder="https://acme.com" maxLength={2048} />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
