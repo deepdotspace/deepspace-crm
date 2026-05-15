@@ -68,6 +68,11 @@ interface InboxPayload {
   messages?: GmailMessage[]
   nextPageToken?: string
   resultSizeEstimate?: number
+  // Authoritative INBOX total when the request opted in via
+  // `includeLabelTotal: true`. Sourced from `users.labels.get('INBOX')`
+  // which is what mail.google.com displays — preferred over
+  // `resultSizeEstimate`, which can drift across pages.
+  labelTotal?: { messagesTotal?: number; messagesUnread?: number }
   partialErrors?: Array<{ id: string; status: number; error: string }>
   error?: string
 }
@@ -157,6 +162,10 @@ export default function EmailPage() {
           maxResults: PAGE_SIZE,
           labelIds: ['INBOX'],
           format: 'full',
+          // Piggyback users.labels.get('INBOX') on every page fetch so
+          // the "X-Y of Z" indicator stays accurate. The server-side
+          // round-trip cost is one parallel call to Google.
+          includeLabelTotal: true,
         }
         if (pageToken) params.pageToken = pageToken
 
@@ -186,8 +195,14 @@ export default function EmailPage() {
 
         setMessages(payload.messages ?? [])
         setNextPageToken(payload.nextPageToken ?? null)
-        if (typeof payload.resultSizeEstimate === 'number') {
-          setResultSizeEstimate(payload.resultSizeEstimate)
+        // Prefer the authoritative label total when present (matches
+        // mail.google.com); fall back to resultSizeEstimate when an
+        // older api-worker without includeLabelTotal is responding.
+        const total =
+          payload.labelTotal?.messagesTotal
+          ?? payload.resultSizeEstimate
+        if (typeof total === 'number') {
+          setResultSizeEstimate(total)
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err))
@@ -363,17 +378,48 @@ export default function EmailPage() {
         </div>
       )}
 
-      {/* Search */}
+      {/* Search row + pagination — search on the left, page indicator
+          and arrows pinned to the right of the same row (mirroring the
+          mail.google.com layout). Pagination is hidden during in-memory
+          search because the search filter only sees the loaded page;
+          paging while filtered would silently change the corpus. */}
       {status.gmailRead && (
-        <div className="relative max-w-sm mb-4">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <input
-            type="text"
-            placeholder="Search inbox…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 bg-secondary/30 border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/50 transition-colors"
-          />
+        <div className="flex items-center gap-3 mb-4">
+          <div className="relative max-w-sm flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <input
+              type="text"
+              placeholder="Search inbox…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 bg-secondary/30 border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/50 transition-colors"
+            />
+          </div>
+          {messages !== null && messages.length > 0 && !search && (
+            <div className="ml-auto flex items-center gap-2 text-sm text-muted-foreground">
+              <span className="tabular-nums">
+                {formatPageRange(currentPageIndex, messages.length, resultSizeEstimate)}
+              </span>
+              <button
+                type="button"
+                onClick={goToPrevPage}
+                disabled={loadingMessages || currentPageIndex === 0}
+                aria-label="Newer"
+                className="inline-flex items-center justify-center rounded-md p-1.5 hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={goToNextPage}
+                disabled={loadingMessages || !nextPageToken}
+                aria-label="Older"
+                className="inline-flex items-center justify-center rounded-md p-1.5 hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -396,40 +442,6 @@ export default function EmailPage() {
           )}
         </div>
       )}
-
-      {/* Pagination — mirrors mail.google.com's "1-50 of 1,091  <  >".
-          Hidden during in-memory search (search only filters the
-          currently-loaded page; pagination would silently change the
-          set the filter is operating against). For full-mailbox search
-          switch to the google/gmail-search endpoint. */}
-      {status.gmailRead &&
-        messages !== null &&
-        messages.length > 0 &&
-        !search && (
-          <div className="mt-4 flex items-center justify-end gap-3 text-sm text-muted-foreground">
-            <span>
-              {formatPageRange(currentPageIndex, messages.length, resultSizeEstimate)}
-            </span>
-            <button
-              type="button"
-              onClick={goToPrevPage}
-              disabled={loadingMessages || currentPageIndex === 0}
-              aria-label="Newer"
-              className="inline-flex items-center justify-center rounded-md p-1.5 hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              onClick={goToNextPage}
-              disabled={loadingMessages || !nextPageToken}
-              aria-label="Older"
-              className="inline-flex items-center justify-center rounded-md p-1.5 hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </button>
-          </div>
-        )}
 
       {status.gmailRead && messages === null && (
         <div className="bg-card border border-border rounded-xl py-16 text-center text-sm text-muted-foreground">
