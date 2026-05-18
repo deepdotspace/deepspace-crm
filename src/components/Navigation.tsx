@@ -5,7 +5,7 @@
 import { useState, useEffect } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { useAuth, AuthOverlay, useUser, signOut } from 'deepspace'
-import { APP_NAME, ROLE_CONFIG, type Role } from '../constants'
+import { APP_NAME, type Role } from '../constants'
 import { nav } from '../nav'
 
 export default function Navigation() {
@@ -16,8 +16,11 @@ export default function Navigation() {
   const [showAuthModal, setShowAuthModal] = useState(false)
   const [userMenuOpen, setUserMenuOpen] = useState(false)
 
+  // Role only used for the nav-item filter below. The role chip next to
+  // the avatar was removed: every signed-in user is the owner of their
+  // own per-user RecordRoom DO, so the badge always read "Admin" for
+  // everyone and only added noise.
   const userRole = (user?.role ?? 'anonymous') as Role | 'anonymous'
-  const roleConfig = ROLE_CONFIG[userRole as Role] ?? { title: 'Anonymous', badgeVariant: 'secondary' }
 
   // Close any open menus when navigating
   useEffect(() => {
@@ -59,19 +62,6 @@ export default function Navigation() {
           </div>
 
           <div className="flex items-center gap-2.5">
-            <span
-              data-testid="nav-role-badge"
-              className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                roleConfig.badgeVariant === 'warning'
-                  ? 'bg-warning/20 text-warning'
-                  : roleConfig.badgeVariant === 'default'
-                    ? 'bg-primary/20 text-primary'
-                    : 'bg-secondary text-muted-foreground'
-              }`}
-            >
-              {roleConfig.title}
-            </span>
-
             {isSignedIn && user ? (
               <div className="relative">
                 <button

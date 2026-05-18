@@ -3,6 +3,7 @@ import { useMemo, useState, useCallback } from 'react'
 import { useCrm } from '../../platform/CrmPlatformProvider'
 import { Badge, Button, Input } from '../../components/ui'
 import { AddActivityDialog } from '../../components/AddActivityDialog'
+import { EmailListWidget } from '../../components/EmailListWidget'
 import {
   ArrowLeft, Building2, Mail, Phone, Calendar, MapPin,
   CircleDollarSign, Clock, Pencil, Check, X, Trash2,
@@ -234,6 +235,25 @@ export default function ContactDetailPage() {
               </div>
             )}
           </div>
+
+          {/* Emails — Gmail-readonly: messages between this contact's
+              email and the user, across all labels (sent + received +
+              archive). Only renders when the contact has an email
+              address to query against. */}
+          {person.email && (
+            <div className="bg-card border border-border rounded-xl p-5">
+              <h2 className="text-sm font-semibold text-foreground mb-4">Emails</h2>
+              <EmailListWidget
+                query={{
+                  q: `from:${person.email} OR to:${person.email}`,
+                  labelIds: [],
+                  maxResults: 10,
+                  format: 'metadata',
+                }}
+                emptyText={`No emails with ${person.email}.`}
+              />
+            </div>
+          )}
         </div>
 
         {/* Sidebar */}

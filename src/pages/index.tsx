@@ -7,6 +7,7 @@ import {
   Phone, Mail, Calendar, FileText, CircleDollarSign,
 } from 'lucide-react'
 import { Badge } from '../components/ui'
+import { EmailListWidget } from '../components/EmailListWidget'
 
 function formatCurrency(amount: number): string {
   if (amount >= 1_000_000) return `$${(amount / 1_000_000).toFixed(1)}M`
@@ -219,6 +220,23 @@ export default function DashboardPage() {
             </div>
           )}
 
+        </div>
+      </div>
+
+      {/* Recent Inbox — top of fold for the Gmail-readonly story */}
+      <div className="mb-4">
+        <div data-testid="recent-emails" className="bg-card border border-border rounded-xl p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold text-foreground">Recent Emails</h2>
+            <Link to="/email" className="text-xs text-primary hover:text-primary/80 flex items-center gap-1">
+              Open inbox <ArrowRight className="w-3 h-3" />
+            </Link>
+          </div>
+          <EmailListWidget
+            query={{ labelIds: ['INBOX'], maxResults: 5, format: 'metadata' }}
+            emptyText="Inbox is empty."
+            compact
+          />
         </div>
       </div>
 

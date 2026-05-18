@@ -92,7 +92,14 @@ export default function EmailPage() {
   const [messages, setMessages] = useState<GmailMessage[] | null>(null)
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [search, setSearch] = useState('')
+  // `searchInput` is the text the user is typing right now.
+  // `searchQuery` is the *committed* search (Enter pressed) that
+  // actually goes to Gmail. Server-side search runs against the
+  // entire mailbox via the `q` parameter on `gmail-inbox` — this
+  // replaces the older in-memory filter that only saw the loaded
+  // page. Empty string = inbox view (default).
+  const [searchInput, setSearchInput] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
   const [statusBump, setStatusBump] = useState(0)
 
   // Pagination state — modeled on Gmail's "1-50 of 1,091 [<] [>]" UI.
@@ -159,14 +166,21 @@ export default function EmailPage() {
       setLoadingMessages(true)
       setError(null)
       try {
+        // When a search query is active we leave `labelIds` off so
+        // Gmail searches the full mailbox (sent + archive + inbox);
+        // otherwise we restrict to INBOX for the default inbox view.
+        // `labelTotal` only applies when filtering to one label, so
+        // we skip it during search.
         const params: Record<string, unknown> = {
           maxResults: PAGE_SIZE,
-          labelIds: ['INBOX'],
           format: 'full',
-          // Piggyback users.labels.get('INBOX') on every page fetch so
-          // the "X-Y of Z" indicator stays accurate. The server-side
-          // round-trip cost is one parallel call to Google.
-          includeLabelTotal: true,
+        }
+        if (searchQuery.trim()) {
+          params.q = searchQuery.trim()
+          params.labelIds = []
+        } else {
+          params.labelIds = ['INBOX']
+          params.includeLabelTotal = true
         }
         if (pageToken) params.pageToken = pageToken
 
@@ -223,8 +237,22 @@ export default function EmailPage() {
         setLoadingMessages(false)
       }
     },
-    [refreshStatus],
+    [refreshStatus, searchQuery],
   )
+
+  // When the committed search query changes, reset pagination state +
+  // refetch from page 1. We watch a primitive (searchQuery, not the
+  // input) so typing into the box doesn't refetch on every keystroke.
+  useEffect(() => {
+    if (!status.gmailRead) return
+    setTokensVisited([null])
+    setCurrentPageIndex(0)
+    setNextPageToken(null)
+    setResultSizeEstimate(null)
+    void fetchPage(null)
+    // fetchPage is stable per-searchQuery via the dep above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery, status.gmailRead])
 
   // Refresh = re-fetch current page, keep history intact.
   const refreshCurrentPage = useCallback(() => {
@@ -265,12 +293,9 @@ export default function EmailPage() {
     void fetchPage(null)
   }, [fetchPage])
 
-  // Auto-load once gmail.readonly is granted.
-  useEffect(() => {
-    if (status.gmailRead && messages === null && !loadingMessages) {
-      resetToFirstPage()
-    }
-  }, [status.gmailRead, messages, loadingMessages, resetToFirstPage])
+  // (Auto-load on grant is handled by the searchQuery effect above —
+  // when status.gmailRead first becomes true, that effect fires with
+  // searchQuery="" and fetches the default inbox view.)
 
   // ── disconnect ──
   const onDisconnect = useCallback(async () => {
@@ -301,7 +326,10 @@ export default function EmailPage() {
     )
   }
 
-  const filtered = messages ? filterMessages(messages, search) : null
+  // Server-side search means the API already returns only matching
+  // messages — no in-memory filter needed. Variable kept for the JSX
+  // below to avoid a wider refactor.
+  const filtered = messages
 
   return (
     <div data-testid="email-page" className="p-6 max-w-[1000px] mx-auto">
@@ -392,23 +420,37 @@ export default function EmailPage() {
       )}
 
       {/* Search row + pagination — search on the left, page indicator
-          and arrows pinned to the right of the same row (mirroring the
-          mail.google.com layout). Pagination is hidden during in-memory
-          search because the search filter only sees the loaded page;
-          paging while filtered would silently change the corpus. */}
+          and arrows pinned to the right (mirroring mail.google.com).
+          Search now hits Gmail's `q` parameter server-side (full
+          mailbox, not just the loaded page); committed on Enter or
+          on clearing the input. Pagination shows totals only in the
+          default inbox view because Google doesn't return a reliable
+          total for arbitrary search queries. */}
       {status.gmailRead && (
         <div className="flex items-center gap-3 mb-4">
-          <div className="relative max-w-sm flex-1">
+          <form
+            className="relative max-w-sm flex-1"
+            onSubmit={(e) => {
+              e.preventDefault()
+              setSearchQuery(searchInput.trim())
+            }}
+          >
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <input
-              type="text"
-              placeholder="Search inbox…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              type="search"
+              placeholder="Search Gmail (e.g. from:alice or has:attachment)"
+              value={searchInput}
+              onChange={(e) => {
+                setSearchInput(e.target.value)
+                // Clear-on-empty without requiring Enter — feels natural.
+                if (e.target.value === '' && searchQuery !== '') {
+                  setSearchQuery('')
+                }
+              }}
               className="w-full pl-9 pr-3 py-2 bg-secondary/30 border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/50 transition-colors"
             />
-          </div>
-          {messages !== null && messages.length > 0 && !search && (
+          </form>
+          {messages !== null && messages.length > 0 && !searchQuery && (
             <div className="ml-auto flex items-center gap-2 text-sm text-muted-foreground">
               <span className="tabular-nums">
                 {formatPageRange(currentPageIndex, messages.length, resultSizeEstimate)}
@@ -443,7 +485,7 @@ export default function EmailPage() {
             <div className="text-center py-16">
               <Mail className="w-10 h-10 text-muted-foreground/20 mx-auto mb-3" />
               <p className="text-sm text-muted-foreground">
-                {search ? 'No messages match your search.' : 'Inbox is empty.'}
+                {searchQuery ? `No messages match "${searchQuery}".` : 'Inbox is empty.'}
               </p>
             </div>
           ) : (
@@ -467,6 +509,15 @@ export default function EmailPage() {
 
 function MessageRow({ message }: { message: GmailMessage }) {
   const [open, setOpen] = useState(false)
+  // Lazily-fetched full thread (all messages in this conversation).
+  // Single-message rendering is the wrong UX — clicking a row in
+  // Gmail's UI opens the entire thread in chronological order, with
+  // each message collapsible. We do the same via gmail-thread-get,
+  // fetched only once per row when it's first expanded.
+  const [thread, setThread] = useState<GmailMessage[] | null>(null)
+  const [threadLoading, setThreadLoading] = useState(false)
+  const [threadError, setThreadError] = useState<string | null>(null)
+
   const headers = message.payload?.headers ?? []
   const get = (n: string) => headers.find((h) => h.name?.toLowerCase() === n.toLowerCase())?.value
   const from = parseFrom(get('From') ?? '')
@@ -477,7 +528,31 @@ function MessageRow({ message }: { message: GmailMessage }) {
   // literally so we must decode before display, otherwise users see the
   // raw entities.
   const decodedSnippet = message.snippet ? decodeHtmlEntities(message.snippet) : ''
-  const body = open ? extractBody(message.payload) : null
+
+  const onToggle = useCallback(async () => {
+    const next = !open
+    setOpen(next)
+    if (!next) return
+    if (thread !== null) return // already loaded
+    setThreadLoading(true)
+    setThreadError(null)
+    try {
+      const res = await integration.post('google/gmail-thread-get', {
+        id: message.threadId ?? message.id,
+        format: 'full',
+      })
+      if (!res.success) {
+        setThreadError(res.error ?? 'Thread fetch failed')
+        return
+      }
+      const data = ((res.data ?? res) as { messages?: GmailMessage[] })
+      setThread(data.messages ?? [message])
+    } catch (err) {
+      setThreadError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setThreadLoading(false)
+    }
+  }, [open, thread, message])
 
   return (
     <div className="flex items-start gap-3 p-4 hover:bg-secondary/10 transition-colors">
@@ -487,7 +562,7 @@ function MessageRow({ message }: { message: GmailMessage }) {
       <div className="flex-1 min-w-0">
         <button
           type="button"
-          onClick={() => setOpen((o) => !o)}
+          onClick={onToggle}
           className="block w-full text-left"
           aria-expanded={open}
         >
@@ -495,7 +570,12 @@ function MessageRow({ message }: { message: GmailMessage }) {
             <span className="text-sm font-medium text-foreground truncate">
               {from.display}
             </span>
-            <span className="text-xs text-muted-foreground flex-shrink-0">{dateStr}</span>
+            {thread && thread.length > 1 && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-secondary/50 text-muted-foreground flex-shrink-0">
+                {thread.length}
+              </span>
+            )}
+            <span className="text-xs text-muted-foreground flex-shrink-0 ml-auto">{dateStr}</span>
           </div>
           <div className="text-sm text-foreground truncate mt-0.5">
             {decodeHtmlEntities(subject)}
@@ -505,64 +585,114 @@ function MessageRow({ message }: { message: GmailMessage }) {
           )}
         </button>
 
-        {open && body && (
-          // Render in a "white envelope" container so sender-supplied
-          // inline colors (which assume a white inbox background, like
-          // mail.google.com) display correctly even in dark mode. The
-          // `color: #111` baseline gives unstyled text a readable
-          // default; senders that override it (most do, with their own
-          // brand colors) get exactly what they intended.
-          <div
-            className="mt-3 rounded-md border border-border overflow-hidden"
-            style={{ colorScheme: 'light' }}
-          >
-            {body.kind === 'html' ? (
-              <div
-                className="email-html"
-                style={{
-                  background: '#ffffff',
-                  color: '#111111',
-                  padding: '16px',
-                  fontSize: '14px',
-                  lineHeight: 1.5,
-                  wordBreak: 'break-word',
-                  overflowWrap: 'anywhere',
-                }}
-                // We sanitize before render. The HTML payload comes from
-                // Google but originated from arbitrary senders, so it
-                // must be treated as untrusted.
-                dangerouslySetInnerHTML={{ __html: body.value }}
-              />
-            ) : (
-              <pre
-                className="whitespace-pre-wrap break-words font-sans"
-                style={{
-                  background: '#ffffff',
-                  color: '#111111',
-                  padding: '16px',
-                  fontSize: '14px',
-                  lineHeight: 1.5,
-                  margin: 0,
-                }}
-              >
-                {body.value}
-              </pre>
+        {open && (
+          <div className="mt-3 space-y-2">
+            {threadLoading && (
+              <div className="text-xs text-muted-foreground">Loading thread…</div>
             )}
+            {threadError && (
+              <div className="rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-700">
+                {threadError}
+              </div>
+            )}
+            {thread && thread.map((m, idx) => (
+              <ThreadMessage key={m.id} message={m} defaultOpen={idx === thread.length - 1} />
+            ))}
+            <a
+              href={threadUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-2 inline-flex items-center gap-1 text-xs text-primary hover:underline"
+            >
+              <ExternalLink className="w-3 h-3" />
+              Open in Gmail
+            </a>
           </div>
         )}
-
-        {open && (
-          <a
-            href={threadUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="mt-2 inline-flex items-center gap-1 text-xs text-primary hover:underline"
-          >
-            <ExternalLink className="w-3 h-3" />
-            Open in Gmail
-          </a>
-        )}
       </div>
+    </div>
+  )
+}
+
+/**
+ * One message inside a thread view. Defaults the most-recent message
+ * (last in chronological order) to expanded; older messages collapse
+ * to a one-line "From — date" header that the user can click to expand.
+ * This matches Gmail's thread-view behavior.
+ */
+function ThreadMessage({
+  message,
+  defaultOpen,
+}: {
+  message: GmailMessage
+  defaultOpen: boolean
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+  const headers = message.payload?.headers ?? []
+  const get = (n: string) => headers.find((h) => h.name?.toLowerCase() === n.toLowerCase())?.value
+  const from = parseFrom(get('From') ?? '')
+  const dateStr = formatDate(message.internalDate)
+  const body = open ? extractBody(message.payload) : null
+  const decodedSnippet = message.snippet ? decodeHtmlEntities(message.snippet) : ''
+
+  return (
+    <div className="rounded-md border border-border overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-secondary/20 transition-colors"
+        aria-expanded={open}
+      >
+        <span className="text-xs font-medium text-foreground truncate">
+          {from.display}
+        </span>
+        {!open && decodedSnippet && (
+          <span className="text-xs text-muted-foreground truncate flex-1 min-w-0">
+            — {decodedSnippet}
+          </span>
+        )}
+        <span className="text-[11px] text-muted-foreground flex-shrink-0 ml-auto">
+          {dateStr}
+        </span>
+      </button>
+      {open && body && (
+        // Same "white envelope" treatment as before — sender-supplied
+        // inline styles assume a white background. Nested message body
+        // gets its own light container.
+        <div style={{ colorScheme: 'light' }}>
+          {body.kind === 'html' ? (
+            <div
+              className="email-html"
+              style={{
+                background: '#ffffff',
+                color: '#111111',
+                padding: '16px',
+                fontSize: '14px',
+                lineHeight: 1.5,
+                wordBreak: 'break-word',
+                overflowWrap: 'anywhere',
+              }}
+              // Sanitized via DOMPurify before render — see
+              // sanitizeEmailHtml below.
+              dangerouslySetInnerHTML={{ __html: body.value }}
+            />
+          ) : (
+            <pre
+              className="whitespace-pre-wrap break-words font-sans"
+              style={{
+                background: '#ffffff',
+                color: '#111111',
+                padding: '16px',
+                fontSize: '14px',
+                lineHeight: 1.5,
+                margin: 0,
+              }}
+            >
+              {body.value}
+            </pre>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -618,23 +748,6 @@ function formatPageRange(
     return `${range} of ${total.toLocaleString()}`
   }
   return range
-}
-
-function filterMessages(messages: GmailMessage[], q: string): GmailMessage[] {
-  if (!q.trim()) return messages
-  const needle = q.toLowerCase()
-  return messages.filter((m) => {
-    const headers = m.payload?.headers ?? []
-    const from = headers.find((h) => h.name?.toLowerCase() === 'from')?.value ?? ''
-    const subject = headers.find((h) => h.name?.toLowerCase() === 'subject')?.value ?? ''
-    // Decode entities so a search for "don't" matches a snippet that
-    // contains "don&#39;t".
-    return (
-      decodeHtmlEntities(from).toLowerCase().includes(needle) ||
-      decodeHtmlEntities(subject).toLowerCase().includes(needle) ||
-      decodeHtmlEntities(m.snippet ?? '').toLowerCase().includes(needle)
-    )
-  })
 }
 
 // Decode the HTML entities Gmail puts in `snippet` and message-header

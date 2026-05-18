@@ -3,6 +3,7 @@ import { useMemo, useState, useCallback } from 'react'
 import { useCrm } from '../../platform/CrmPlatformProvider'
 import { Badge, Button, Input, DatePicker } from '../../components/ui'
 import { AddActivityDialog } from '../../components/AddActivityDialog'
+import { EmailListWidget } from '../../components/EmailListWidget'
 import {
   ArrowLeft, Building2, CircleDollarSign, Calendar, Users,
   Clock, FileText, Pencil, Check, X, Trash2, Plus, Phone,
@@ -320,6 +321,29 @@ export default function DealDetailPage() {
               </div>
             )}
           </div>
+
+          {/* Emails — Gmail-readonly: messages with any contact linked
+              to this deal. Builds a multi-clause query so Gmail filters
+              server-side; we only render. Skipped when no linked
+              contact has an email yet. */}
+          {(() => {
+            const emails = linkedContacts
+              .map((lc) => lc.person?.email)
+              .filter((e): e is string => !!e)
+            if (emails.length === 0) return null
+            const q = emails
+              .map((e) => `(from:${e} OR to:${e})`)
+              .join(' OR ')
+            return (
+              <div className="bg-card border border-border rounded-xl p-5">
+                <h2 className="text-sm font-semibold text-foreground mb-4">Emails</h2>
+                <EmailListWidget
+                  query={{ q, labelIds: [], maxResults: 10, format: 'metadata' }}
+                  emptyText="No emails with this deal's contacts."
+                />
+              </div>
+            )
+          })()}
         </div>
 
         {/* Sidebar */}
