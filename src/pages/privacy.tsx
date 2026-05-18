@@ -128,10 +128,10 @@ export default function PrivacyPage() {
           <li>
             <strong>Delete your CRM data.</strong> Email{' '}
             <a
-              href="mailto:support@deep.space"
+              href="mailto:mcapi@eudaimonic.one"
               className="text-primary hover:underline"
             >
-              support@deep.space
+              mcapi@eudaimonic.one
             </a>{' '}
             and we will erase your Durable Object instance within 30 days.
           </li>
@@ -153,10 +153,10 @@ export default function PrivacyPage() {
         <p>
           Questions about this policy:{' '}
           <a
-            href="mailto:support@deep.space"
+            href="mailto:mcapi@eudaimonic.one"
             className="text-primary hover:underline"
           >
-            support@deep.space
+            mcapi@eudaimonic.one
           </a>
           .
         </p>

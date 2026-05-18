@@ -14,6 +14,8 @@ export type Path =
   | `/deals`
   | `/deals/:id`
   | `/email`
+  | `/privacy`
+  | `/terms`
 
 export type Params = {
   '/*': { '*': string }

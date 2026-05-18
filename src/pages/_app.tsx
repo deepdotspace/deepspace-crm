@@ -6,7 +6,7 @@
  */
 
 import { Suspense, type ReactNode } from 'react'
-import { Outlet } from 'react-router-dom'
+import { Outlet, Link, useLocation } from 'react-router-dom'
 import { DeepSpaceAuthProvider, useAuth, useAuthUser, AuthOverlay } from 'deepspace'
 import { RecordProvider, RecordScope } from 'deepspace'
 import { ToastProvider } from '../components/ui'
@@ -15,7 +15,35 @@ import { CrmPlatformProvider } from '../platform/CrmPlatformProvider'
 import { APP_NAME } from '../constants'
 import { schemas } from '../schemas'
 
+// Routes that render WITHOUT auth or the RecordRoom mounted. Required so
+// Google's OAuth verification reviewer can fetch /privacy and /terms
+// anonymously from the consent-screen links, and so users who hit those
+// links from outside the app don't get bounced to a sign-in modal.
+const PUBLIC_PATHS = new Set(['/privacy', '/terms'])
+
 export default function App() {
+  const location = useLocation()
+  const isPublic = PUBLIC_PATHS.has(location.pathname)
+
+  // Public legal pages render outside AuthGate / RecordScope. They don't
+  // need the CRM data layer, and they MUST be reachable without sign-in.
+  if (isPublic) {
+    return (
+      <ToastProvider>
+        <DeepSpaceAuthProvider>
+          <div className="min-h-screen flex flex-col bg-background">
+            <main className="flex-1">
+              <Suspense fallback={<div className="flex items-center justify-center h-full text-muted-foreground">Loading...</div>}>
+                <Outlet />
+              </Suspense>
+            </main>
+            <LegalFooter />
+          </div>
+        </DeepSpaceAuthProvider>
+      </ToastProvider>
+    )
+  }
+
   return (
     <ToastProvider>
       <DeepSpaceAuthProvider>
@@ -27,12 +55,35 @@ export default function App() {
                 <Suspense fallback={<div className="flex items-center justify-center h-full text-muted-foreground">Loading...</div>}>
                   <Outlet />
                 </Suspense>
+                {/* Legal footer — required by Google OAuth verification.
+                    The Privacy / Terms links must be reachable from every
+                    page so the consent-screen URLs resolve to live pages
+                    the assessor can review. */}
+                <LegalFooter />
               </main>
             </div>
           </CrmPlatformProvider>
         </AuthGate>
       </DeepSpaceAuthProvider>
     </ToastProvider>
+  )
+}
+
+function LegalFooter() {
+  return (
+    <footer className="border-t border-border bg-card/40 mt-8 px-4 sm:px-6 lg:px-8 py-4 text-xs text-muted-foreground">
+      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-2">
+        <span>© {new Date().getFullYear()} DeepSpace</span>
+        <div className="flex items-center gap-4">
+          <Link to="/privacy" className="hover:text-foreground transition-colors">
+            Privacy Policy
+          </Link>
+          <Link to="/terms" className="hover:text-foreground transition-colors">
+            Terms of Service
+          </Link>
+        </div>
+      </div>
+    </footer>
   )
 }
 
