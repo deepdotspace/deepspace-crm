@@ -17,7 +17,7 @@ export const companiesSchema: CollectionSchema = {
     { name: 'Address', storage: 'text', interpretation: 'plain' },
     { name: 'Website', storage: 'text', interpretation: { kind: 'url' } },
     { name: 'Notes', storage: 'text', interpretation: 'plain' },
-    { name: 'OwnerId', storage: 'text', interpretation: 'plain' },
+    { name: 'OwnerId', storage: 'text', interpretation: 'plain', userBound: true, immutable: true },
   ],
   ownerField: 'OwnerId',
   permissions: {
@@ -40,7 +40,7 @@ export const dealsSchema: CollectionSchema = {
     { name: 'Currency', storage: 'text', interpretation: 'plain' },
     { name: 'CloseDate', storage: 'text', interpretation: { kind: 'date' } },
     { name: 'Probability', storage: 'number', interpretation: { kind: 'percent', decimals: 0 } },
-    { name: 'OwnerId', storage: 'text', interpretation: 'plain' },
+    { name: 'OwnerId', storage: 'text', interpretation: 'plain', userBound: true, immutable: true },
     { name: 'Status', storage: 'text', interpretation: { kind: 'select', options: ['open', 'won', 'lost', 'stale'] } },
     { name: 'LossReason', storage: 'text', interpretation: 'plain' },
     { name: 'Source', storage: 'text', interpretation: { kind: 'select', options: ['inbound', 'outbound', 'referral', 'partner', 'other'] } },
@@ -89,7 +89,7 @@ export const activitiesSchema: CollectionSchema = {
     { name: 'TaskId', storage: 'text', interpretation: 'plain' },
     { name: 'CompletedAt', storage: 'text', interpretation: { kind: 'datetime' } },
     { name: 'DueAt', storage: 'text', interpretation: { kind: 'datetime' } },
-    { name: 'OwnerId', storage: 'text', interpretation: 'plain' },
+    { name: 'OwnerId', storage: 'text', interpretation: 'plain', userBound: true, immutable: true },
   ],
   ownerField: 'OwnerId',
   permissions: {
