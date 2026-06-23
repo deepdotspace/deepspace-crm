@@ -77,7 +77,14 @@ export default function TermsPage() {
             mail.google.com
           </code>{' '}
           scope) and never sends or modifies mail without an explicit action by
-          you. You may revoke this access at any time by clicking
+          you. When you choose to schedule, view, reschedule, or cancel a meeting
+          from within the CRM, you additionally grant the{' '}
+          <code className="rounded bg-secondary/40 px-1.5 py-0.5 text-xs">
+            calendar.events
+          </code>{' '}
+          scope, which the Service uses only to create and manage the calendar
+          events for meetings you set up — never to read or change your calendar
+          without an explicit action by you. You may revoke this access at any time by clicking
           "Disconnect" in the Email tab or by visiting{' '}
           <a
             href="https://myaccount.google.com/permissions"

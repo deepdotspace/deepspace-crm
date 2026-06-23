@@ -5,8 +5,11 @@ import { Badge, Button, Input } from '../../components/ui'
 import { AddActivityDialog } from '../../components/AddActivityDialog'
 import { ComposeEmailDialog } from '../../components/ComposeEmailDialog'
 import { EmailListWidget } from '../../components/EmailListWidget'
+import { ScheduleMeetingDialog } from '../../components/ScheduleMeetingDialog'
+import { UpcomingMeetingsWidget } from '../../components/UpcomingMeetingsWidget'
+import type { CalendarEvent } from '../../platform/useCalendar'
 import {
-  ArrowLeft, Building2, Mail, Phone, Calendar, MapPin,
+  ArrowLeft, Building2, Mail, Phone, Calendar, CalendarPlus, MapPin,
   CircleDollarSign, Clock, Pencil, Check, X, Trash2,
   Plus, FileText, MessageSquare,
 } from 'lucide-react'
@@ -49,6 +52,9 @@ export default function ContactDetailPage() {
   const [editValue, setEditValue] = useState('')
   const [showAddActivity, setShowAddActivity] = useState(false)
   const [showCompose, setShowCompose] = useState(false)
+  const [showSchedule, setShowSchedule] = useState(false)
+  const [rescheduleEvent, setRescheduleEvent] = useState<CalendarEvent | null>(null)
+  const [meetingsRefresh, setMeetingsRefresh] = useState(0)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
   const person = useMemo(() => people.find(p => p.id === id), [people, id])
@@ -135,6 +141,14 @@ export default function ContactDetailPage() {
                 )}
               </div>
               <div className="flex items-center gap-1.5">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => { setRescheduleEvent(null); setShowSchedule(true) }}
+                >
+                  <CalendarPlus className="w-3.5 h-3.5" />
+                  Schedule
+                </Button>
                 <Button variant="outline" size="sm" onClick={() => setShowAddActivity(true)}>
                   <Plus className="w-3.5 h-3.5" />
                   Activity
@@ -263,6 +277,31 @@ export default function ContactDetailPage() {
               />
             </div>
           )}
+
+          {/* Upcoming meetings — Google Calendar events with this contact
+              (calendar.events). Reschedule/cancel act on the same events;
+              scheduling a new one lives behind the header "Schedule" button. */}
+          {person.email && (
+            <div className="bg-card border border-border rounded-xl p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-sm font-semibold text-foreground">Meetings</h2>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => { setRescheduleEvent(null); setShowSchedule(true) }}
+                >
+                  <CalendarPlus className="w-3.5 h-3.5" />
+                  Schedule
+                </Button>
+              </div>
+              <UpcomingMeetingsWidget
+                emails={[person.email]}
+                refreshKey={meetingsRefresh}
+                emptyText={`No upcoming meetings with ${person.name}.`}
+                onReschedule={(ev) => { setRescheduleEvent(ev); setShowSchedule(true) }}
+              />
+            </div>
+          )}
         </div>
 
         {/* Sidebar */}
@@ -363,6 +402,17 @@ export default function ContactDetailPage() {
         contactName={person.name}
         contactId={person.id}
         companyId={person.companyId ?? undefined}
+      />
+
+      <ScheduleMeetingDialog
+        open={showSchedule}
+        onClose={() => { setShowSchedule(false); setRescheduleEvent(null) }}
+        event={rescheduleEvent}
+        prefillAttendee={person.email ?? ''}
+        contactName={person.name}
+        contactId={person.id}
+        companyId={person.companyId ?? undefined}
+        onSaved={() => setMeetingsRefresh((n) => n + 1)}
       />
     </div>
   )

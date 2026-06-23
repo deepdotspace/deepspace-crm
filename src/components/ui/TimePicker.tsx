@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { Clock, ChevronDown } from 'lucide-react'
-import { Popover, PopoverTrigger, PopoverContent } from './Popover'
 import { cn } from './utils'
 import { generateTimeSlots, formatTime12h, parseTimeString } from './date-utils'
 
@@ -21,6 +20,15 @@ export interface TimePickerProps {
   className?: string
 }
 
+/**
+ * TimePicker — scrollable list of time slots.
+ *
+ * The dropdown is rendered INLINE (not in a portal) on purpose. A portaled
+ * Radix Popover, when opened from inside a Dialog, has its wheel events
+ * swallowed by the Dialog's scroll-lock (react-remove-scroll) — you could drag
+ * the scrollbar but the mouse wheel did nothing. Keeping the list in the
+ * Dialog's own DOM subtree means the wheel scrolls it natively, everywhere.
+ */
 export function TimePicker({
   value = '',
   onChange,
@@ -33,8 +41,8 @@ export function TimePicker({
   className,
 }: TimePickerProps) {
   const [open, setOpen] = useState(false)
+  const wrapperRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
-  const selectedRef = useRef<HTMLButtonElement>(null)
 
   const slots = useMemo(() => generateTimeSlots(interval, minTime, maxTime), [interval, minTime, maxTime])
 
@@ -42,26 +50,43 @@ export function TimePicker({
     ? (format === '12h' ? formatTime12h(value) : value)
     : ''
 
-  // Auto-scroll to selected or nearest slot when dropdown opens
+  // Close on outside click or Escape.
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  // Scroll the selected (or nearest) slot into view when the list opens.
   useEffect(() => {
     if (!open || !listRef.current) return
     const raf = requestAnimationFrame(() => {
-      if (selectedRef.current) {
-        selectedRef.current.scrollIntoView({ block: 'center' })
-      } else if (value && listRef.current) {
-        // Scroll to nearest slot
-        const { hours, minutes } = parseTimeString(value)
-        const totalMin = hours * 60 + minutes
-        const nearestIdx = slots.reduce((best, slot, i) => {
-          const { hours: sh, minutes: sm } = parseTimeString(slot)
-          const slotMin = sh * 60 + sm
-          const bestSlot = parseTimeString(slots[best])
-          const bestMin = bestSlot.hours * 60 + bestSlot.minutes
-          return Math.abs(slotMin - totalMin) < Math.abs(bestMin - totalMin) ? i : best
-        }, 0)
-        const buttons = listRef.current.querySelectorAll('button')
-        buttons[nearestIdx]?.scrollIntoView({ block: 'center' })
+      const list = listRef.current
+      if (!list) return
+      const selected = list.querySelector<HTMLElement>('[data-selected="true"]')
+      if (selected) {
+        selected.scrollIntoView({ block: 'center' })
+        return
       }
+      if (!value) return
+      const { hours, minutes } = parseTimeString(value)
+      const totalMin = hours * 60 + minutes
+      const nearestIdx = slots.reduce((best, slot, i) => {
+        const { hours: sh, minutes: sm } = parseTimeString(slot)
+        const slotMin = sh * 60 + sm
+        const bestSlot = parseTimeString(slots[best])
+        const bestMin = bestSlot.hours * 60 + bestSlot.minutes
+        return Math.abs(slotMin - totalMin) < Math.abs(bestMin - totalMin) ? i : best
+      }, 0)
+      list.querySelectorAll('button')[nearestIdx]?.scrollIntoView({ block: 'center' })
     })
     return () => cancelAnimationFrame(raf)
   }, [open, value, slots])
@@ -72,35 +97,41 @@ export function TimePicker({
   }, [onChange])
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild disabled={disabled}>
-        <button
-          type="button"
-          className={cn(
-            'flex h-9 w-full items-center justify-between rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors',
-            'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
-            'disabled:cursor-not-allowed disabled:opacity-50',
-            !value && 'text-muted-foreground',
-            className,
-          )}
-          data-testid="time-picker-trigger"
+    <div ref={wrapperRef} className={cn('relative', className)}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((o) => !o)}
+        className={cn(
+          'flex h-9 w-full items-center justify-between rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors',
+          'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+          'disabled:cursor-not-allowed disabled:opacity-50',
+          !value && 'text-muted-foreground',
+        )}
+        data-testid="time-picker-trigger"
+      >
+        <span className="flex items-center gap-2">
+          <Clock className="w-4 h-4 text-muted-foreground" />
+          {displayValue || placeholder}
+        </span>
+        <ChevronDown className={cn('w-3.5 h-3.5 text-muted-foreground transition-transform', open && 'rotate-180')} />
+      </button>
+
+      {open && (
+        <div
+          ref={listRef}
+          role="listbox"
+          className="absolute left-0 top-full z-50 mt-1 max-h-56 w-full overflow-y-auto overscroll-contain rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-md"
         >
-          <span className="flex items-center gap-2">
-            <Clock className="w-4 h-4 text-muted-foreground" />
-            {displayValue || placeholder}
-          </span>
-          <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent className="w-48 p-1" align="start">
-        <div ref={listRef} className="max-h-56 overflow-y-auto">
-          {slots.map(slot => {
+          {slots.map((slot) => {
             const isSelected = slot === value
             return (
               <button
                 key={slot}
-                ref={isSelected ? selectedRef : undefined}
                 type="button"
+                role="option"
+                aria-selected={isSelected}
+                data-selected={isSelected}
                 onClick={() => handleSelect(slot)}
                 className={cn(
                   'w-full text-left px-3 py-1.5 text-sm rounded-md transition-colors',
@@ -114,7 +145,7 @@ export function TimePicker({
             )
           })}
         </div>
-      </PopoverContent>
-    </Popover>
+      )}
+    </div>
   )
 }

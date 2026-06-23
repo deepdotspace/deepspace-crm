@@ -4,8 +4,11 @@ import { useCrm } from '../../platform/CrmPlatformProvider'
 import { Badge, Button, Input, DatePicker } from '../../components/ui'
 import { AddActivityDialog } from '../../components/AddActivityDialog'
 import { EmailListWidget } from '../../components/EmailListWidget'
+import { ScheduleMeetingDialog } from '../../components/ScheduleMeetingDialog'
+import { UpcomingMeetingsWidget } from '../../components/UpcomingMeetingsWidget'
+import type { CalendarEvent } from '../../platform/useCalendar'
 import {
-  ArrowLeft, Building2, CircleDollarSign, Calendar, Users,
+  ArrowLeft, Building2, CircleDollarSign, Calendar, CalendarPlus, Users,
   Clock, FileText, Pencil, Check, X, Trash2, Plus, Phone,
   Mail, Trophy, XCircle, AlertTriangle, ChevronRight,
 } from 'lucide-react'
@@ -43,6 +46,9 @@ export default function DealDetailPage() {
   const [editing, setEditing] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [showAddActivity, setShowAddActivity] = useState(false)
+  const [showSchedule, setShowSchedule] = useState(false)
+  const [rescheduleEvent, setRescheduleEvent] = useState<CalendarEvent | null>(null)
+  const [meetingsRefresh, setMeetingsRefresh] = useState(0)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
   const deal = useMemo(() => deals.find(d => d.id === id), [deals, id])
@@ -177,6 +183,14 @@ export default function DealDetailPage() {
                     </Button>
                   </>
                 )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => { setRescheduleEvent(null); setShowSchedule(true) }}
+                >
+                  <CalendarPlus className="w-3.5 h-3.5" />
+                  Schedule
+                </Button>
                 <Button variant="outline" size="sm" onClick={() => setShowAddActivity(true)}>
                   <Plus className="w-3.5 h-3.5" />
                   Activity
@@ -345,6 +359,36 @@ export default function DealDetailPage() {
               </div>
             )
           })()}
+
+          {/* Upcoming meetings — Google Calendar events with any contact
+              linked to this deal (calendar.events). */}
+          {(() => {
+            const emails = linkedContacts
+              .map((lc) => lc.person?.email)
+              .filter((e): e is string => !!e)
+            if (emails.length === 0) return null
+            return (
+              <div className="bg-card border border-border rounded-xl p-5">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-sm font-semibold text-foreground">Meetings</h2>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => { setRescheduleEvent(null); setShowSchedule(true) }}
+                  >
+                    <CalendarPlus className="w-3.5 h-3.5" />
+                    Schedule
+                  </Button>
+                </div>
+                <UpcomingMeetingsWidget
+                  emails={emails}
+                  refreshKey={meetingsRefresh}
+                  emptyText="No upcoming meetings with this deal's contacts."
+                  onReschedule={(ev) => { setRescheduleEvent(ev); setShowSchedule(true) }}
+                />
+              </div>
+            )
+          })()}
         </div>
 
         {/* Sidebar */}
@@ -404,6 +448,18 @@ export default function DealDetailPage() {
         open={showAddActivity}
         onClose={() => setShowAddActivity(false)}
         prefillDealId={deal.id}
+      />
+
+      <ScheduleMeetingDialog
+        open={showSchedule}
+        onClose={() => { setShowSchedule(false); setRescheduleEvent(null) }}
+        event={rescheduleEvent}
+        prefillAttendee={linkedContacts.map((lc) => lc.person?.email).filter(Boolean).join(', ')}
+        contactName={linkedContacts.length === 1 ? linkedContacts[0].person?.name : deal.title}
+        contactId={linkedContacts.length === 1 ? linkedContacts[0].person?.id : undefined}
+        companyId={deal.companyId ?? undefined}
+        dealId={deal.id}
+        onSaved={() => setMeetingsRefresh((n) => n + 1)}
       />
     </div>
   )

@@ -123,6 +123,47 @@ export default function PrivacyPage() {
       </section>
 
       <section className="mt-8 space-y-4">
+        <h2 className="text-base font-semibold">Google Calendar data</h2>
+        <p>
+          When you schedule, view, reschedule, or cancel a meeting from the CRM,
+          we request the{' '}
+          <code className="rounded bg-secondary/40 px-1.5 py-0.5 text-xs">
+            calendar.events
+          </code>{' '}
+          scope. We use it only to carry out the specific action you take:
+        </p>
+        <ul className="list-disc pl-5 space-y-2">
+          <li>
+            <strong>Schedule</strong> — create a calendar event for a meeting you
+            set up with a contact, inviting them as a guest (Google emails them
+            the invitation) and optionally adding a Google Meet link.
+          </li>
+          <li>
+            <strong>View upcoming meetings</strong> — list events on your
+            calendar that involve a contact, shown on that contact's (or deal's)
+            detail page.
+          </li>
+          <li>
+            <strong>Reschedule</strong> — change the time of a meeting you
+            created; attendees are notified of the change.
+          </li>
+          <li>
+            <strong>Cancel</strong> — delete a meeting you created; attendees are
+            notified of the cancellation.
+          </li>
+        </ul>
+        <p>
+          Every action is initiated by an explicit click; the CRM never creates
+          or changes calendar events on its own, and no automated agent has
+          access to these capabilities. We do not store the contents of your
+          calendar on our servers; every request goes straight to and from the
+          Google Calendar API. When a meeting is scheduled we record only a
+          local CRM activity (its title, time, and the Google event id) so it
+          appears on the contact and deal timelines.
+        </p>
+      </section>
+
+      <section className="mt-8 space-y-4">
         <h2 className="text-base font-semibold">Limited Use disclosure</h2>
         <p className="rounded-md border border-border bg-secondary/20 p-3">
           DeepSpace CRM's use and transfer to any other app of information
