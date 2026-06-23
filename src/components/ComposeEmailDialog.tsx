@@ -1,17 +1,27 @@
 /**
- * ComposeEmailDialog — CRM email compose dialog.
- * Sends emails via DeepSpace email (@app.space), auto-logs as activity.
+ * ComposeEmailDialog — CRM email compose / reply dialog.
+ *
+ * Sends through the signed-in user's Gmail account via the SDK
+ * `google/gmail-send` endpoint (gmail.modify scope), and auto-logs the
+ * send as a CRM activity. If the user hasn't yet granted write access,
+ * the first send transparently opens the Google consent popup (handled
+ * inside useGmailWrite) and replays the send.
+ *
+ * Pass `threadId` to send as a reply within an existing Gmail thread —
+ * the SDK resolves the In-Reply-To / References headers so the recipient's
+ * client threads it correctly.
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useCrm } from '../platform/CrmPlatformProvider'
+import { useGmailWrite } from '../platform/useGmailWrite'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
   Button, Input, Label, Textarea,
 } from './ui'
 import {
-  Send, X, ChevronDown, ChevronUp, Sparkles, Mail,
-  ExternalLink, AlertCircle, Check,
+  Send, ChevronDown, ChevronUp, Sparkles,
+  AlertCircle, Check,
 } from 'lucide-react'
 
 interface ComposeEmailDialogProps {
@@ -21,6 +31,8 @@ interface ComposeEmailDialogProps {
   prefillTo?: string
   /** Pre-fill the subject */
   prefillSubject?: string
+  /** Gmail thread id — when set, the send is a reply within that thread. */
+  threadId?: string
   /** Contact name for templates */
   contactName?: string
   /** Contact ID to link the activity to */
@@ -29,6 +41,8 @@ interface ComposeEmailDialogProps {
   companyId?: string
   /** Deal ID to link the activity to */
   dealId?: string
+  /** Called after a successful send (e.g. to refresh the inbox). */
+  onSent?: () => void
 }
 
 interface EmailTemplate {
@@ -106,10 +120,11 @@ Best regards`,
 
 export function ComposeEmailDialog({
   open, onClose,
-  prefillTo, prefillSubject, contactName,
-  contactId, companyId, dealId,
+  prefillTo, prefillSubject, threadId, contactName,
+  contactId, companyId, dealId, onSent,
 }: ComposeEmailDialogProps) {
-  const { addActivity, userId, emailAddress, hasEmail, sendEmail, isSendingEmail } = useCrm()
+  const { addActivity, userId } = useCrm()
+  const { send: sendGmail, isSending } = useGmailWrite()
 
   const [to, setTo] = useState(prefillTo ?? '')
   const [cc, setCc] = useState('')
@@ -177,26 +192,27 @@ export function ComposeEmailDialog({
 
     setError(null)
 
-    const ccAddresses = cc ? parseEmails(cc) : undefined
-    const bccAddresses = bcc ? parseEmails(bcc) : undefined
+    const ccAddresses = cc ? parseEmails(cc) : []
+    const bccAddresses = bcc ? parseEmails(bcc) : []
 
     const htmlBody = body.replace(/\n/g, '<br>')
 
-    const result = await sendEmail({
-      to: toAddresses,
-      cc: ccAddresses,
-      bcc: bccAddresses,
+    // Gmail send takes comma-separated header strings; the SDK re-validates
+    // every address and caps the recipient count server-side.
+    const result = await sendGmail({
+      to: toAddresses.join(', '),
+      cc: ccAddresses.length ? ccAddresses.join(', ') : undefined,
+      bcc: bccAddresses.length ? bccAddresses.join(', ') : undefined,
       subject: subject || '(no subject)',
+      content: body,
       html: htmlBody,
-      text: body,
+      threadId,
     })
 
     if (!result.success) {
-      if (result.rateLimited) {
-        setError('Rate limit exceeded. Please wait a moment and try again.')
-      } else {
-        setError(result.error || 'Failed to send email.')
-      }
+      // User dismissed the consent popup — not an error worth shouting about.
+      if (result.cancelled) return
+      setError(result.error || 'Failed to send email.')
       return
     }
 
@@ -204,7 +220,7 @@ export function ComposeEmailDialog({
     await addActivity({
       type: 'email',
       title: `Email: ${subject || '(no subject)'}`,
-      description: `Sent to ${toAddresses.join(', ')}${ccAddresses?.length ? ` (cc: ${ccAddresses.join(', ')})` : ''}`,
+      description: `Sent to ${toAddresses.join(', ')}${ccAddresses.length ? ` (cc: ${ccAddresses.join(', ')})` : ''}`,
       contactId: contactId || null,
       companyId: companyId || null,
       dealId: dealId || null,
@@ -212,49 +228,11 @@ export function ComposeEmailDialog({
     })
 
     setSent(true)
+    onSent?.()
     setTimeout(() => {
       onClose()
     }, 1500)
-  }, [to, cc, bcc, subject, body, sendEmail, addActivity, contactId, companyId, dealId, userId, onClose, parseEmails])
-
-  // Email not set up — show setup prompt
-  if (open && !hasEmail) {
-    return (
-      <Dialog open={open} onOpenChange={v => { if (!v) onClose() }}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Claim Your @app.space Handle</DialogTitle>
-            <DialogDescription>
-              Email handles are managed in DeepSpace Mail. Claim one there
-              and this dialog will start working automatically.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex flex-col items-center gap-4 py-6">
-            <div className="w-16 h-16 bg-primary/10 rounded-2xl flex items-center justify-center">
-              <Mail className="w-8 h-8 text-primary" />
-            </div>
-            <p className="text-sm text-muted-foreground text-center max-w-xs">
-              Your @app.space address is shared across every DeepSpace app,
-              so claiming it once in Mail makes it available everywhere.
-            </p>
-            <Button
-              onClick={() => window.open('https://deepspace-mail.app.space', '_blank', 'noopener')}
-              className="gap-2"
-            >
-              <ExternalLink className="w-4 h-4" />
-              Open DeepSpace Mail
-            </Button>
-            <button
-              onClick={onClose}
-              className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Maybe later
-            </button>
-          </div>
-        </DialogContent>
-      </Dialog>
-    )
-  }
+  }, [to, cc, bcc, subject, body, threadId, sendGmail, addActivity, contactId, companyId, dealId, userId, onClose, onSent, parseEmails])
 
   // Sent success state
   if (sent) {
@@ -279,11 +257,11 @@ export function ComposeEmailDialog({
         <DialogHeader>
           <div className="flex items-center justify-between">
             <div>
-              <DialogTitle>Compose Email</DialogTitle>
+              <DialogTitle>{threadId ? 'Reply' : 'Compose Email'}</DialogTitle>
               <DialogDescription className="flex items-center gap-1.5 mt-0.5">
                 Sending from
                 <span className="inline-flex items-center rounded-md border border-border bg-secondary px-1.5 py-0.5 text-[10px] font-normal text-secondary-foreground">
-                  {emailAddress}
+                  your Gmail account
                 </span>
               </DialogDescription>
             </div>
@@ -411,10 +389,10 @@ export function ComposeEmailDialog({
                 data-testid="email-send"
                 size="sm"
                 onClick={handleSend}
-                disabled={!to.trim() || (!subject.trim() && !body.trim()) || isSendingEmail}
+                disabled={!to.trim() || (!subject.trim() && !body.trim()) || isSending}
                 className="gap-1.5"
               >
-                {isSendingEmail ? (
+                {isSending ? (
                   <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                 ) : (
                   <Send className="w-3.5 h-3.5" />

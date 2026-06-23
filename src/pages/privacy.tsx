@@ -61,7 +61,7 @@ export default function PrivacyPage() {
           <code className="rounded bg-secondary/40 px-1.5 py-0.5 text-xs">
             gmail.readonly
           </code>{' '}
-          scope. We use this scope to:
+          scope to read your mail. We use it to:
         </p>
         <ul className="list-disc pl-5 space-y-2">
           <li>Display your recent inbox in the Email tab.</li>
@@ -76,17 +76,49 @@ export default function PrivacyPage() {
           <li>Display a "recent emails" summary on the dashboard.</li>
         </ul>
         <p>
-          We do not send, modify, archive, label, mark-as-read, or delete
-          messages — we never request{' '}
-          <code className="rounded bg-secondary/40 px-1.5 py-0.5 text-xs">
-            gmail.send
-          </code>{' '}
-          or{' '}
+          When you first compose, reply, mark read/unread, star, archive, or
+          trash a message from the CRM, we additionally request the{' '}
           <code className="rounded bg-secondary/40 px-1.5 py-0.5 text-xs">
             gmail.modify
-          </code>
-          . Message bodies are not cached or stored on our servers; every
-          request goes straight from the Gmail API to your browser.
+          </code>{' '}
+          scope. We use it only to carry out the specific action you take:
+        </p>
+        <ul className="list-disc pl-5 space-y-2">
+          <li>
+            <strong>Send / reply</strong> — send a message you compose, on your
+            behalf, from your own Gmail account.
+          </li>
+          <li>
+            <strong>Mark read / unread</strong> — add or remove the{' '}
+            <code className="rounded bg-secondary/40 px-1.5 py-0.5 text-xs">UNREAD</code>{' '}
+            label on a message or thread you select.
+          </li>
+          <li>
+            <strong>Star / unstar</strong> — add or remove the{' '}
+            <code className="rounded bg-secondary/40 px-1.5 py-0.5 text-xs">STARRED</code>{' '}
+            label to flag a contact&apos;s emails as important.
+          </li>
+          <li>
+            <strong>Archive</strong> — remove a message or thread from your
+            inbox (remove the{' '}
+            <code className="rounded bg-secondary/40 px-1.5 py-0.5 text-xs">INBOX</code>{' '}
+            label).
+          </li>
+          <li>
+            <strong>Trash</strong> — move a message or thread to Trash, where
+            it remains recoverable.
+          </li>
+        </ul>
+        <p>
+          We never permanently delete mail — we do not request the full{' '}
+          <code className="rounded bg-secondary/40 px-1.5 py-0.5 text-xs">
+            mail.google.com
+          </code>{' '}
+          scope, and Trash deletions stay recoverable in Gmail. Every action is
+          initiated by an explicit click; the CRM never sends or modifies mail
+          on its own, and no automated agent has access to these capabilities.
+          Message bodies are not cached or stored on our servers; every request
+          goes straight to and from the Gmail API.
         </p>
       </section>
 

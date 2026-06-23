@@ -64,8 +64,20 @@ export default function TermsPage() {
           <code className="rounded bg-secondary/40 px-1.5 py-0.5 text-xs">
             gmail.readonly
           </code>{' '}
-          scope. The Service does not send, modify, archive, or delete
-          messages. You may revoke this access at any time by clicking
+          scope. When you choose to compose, reply, mark read/unread, star,
+          archive, or trash a message from within the CRM, you additionally
+          grant the{' '}
+          <code className="rounded bg-secondary/40 px-1.5 py-0.5 text-xs">
+            gmail.modify
+          </code>{' '}
+          scope, which the Service uses only to perform the action you
+          initiate. The Service never permanently deletes messages (it does not
+          request the full{' '}
+          <code className="rounded bg-secondary/40 px-1.5 py-0.5 text-xs">
+            mail.google.com
+          </code>{' '}
+          scope) and never sends or modifies mail without an explicit action by
+          you. You may revoke this access at any time by clicking
           "Disconnect" in the Email tab or by visiting{' '}
           <a
             href="https://myaccount.google.com/permissions"

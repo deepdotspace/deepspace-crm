@@ -12,9 +12,11 @@
  * here to keep the widget compact.
  */
 
+import { useCallback, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Inbox, Mail, ExternalLink } from 'lucide-react'
+import { Inbox, Mail, ExternalLink, Star } from 'lucide-react'
 import { useGmail, type GmailQuery, type GmailMessage } from '../platform/useGmail'
+import { useGmailWrite } from '../platform/useGmailWrite'
 
 interface EmailListWidgetProps {
   /** Gmail query — see useGmail / Gmail search syntax. */
@@ -29,6 +31,12 @@ interface EmailListWidgetProps {
   compact?: boolean
   /** Optional click handler on a row, otherwise opens in Gmail. */
   onMessageClick?: (m: GmailMessage) => void
+  /**
+   * Show a Star toggle on each row (gmail.modify — adds/removes the STARRED
+   * label). Opt-in so read-only surfaces (dashboard) stay link-only; enabled
+   * on contact/deal detail where flagging a contact's mail is a CRM action.
+   */
+  enableStar?: boolean
 }
 
 export function EmailListWidget({
@@ -38,8 +46,26 @@ export function EmailListWidget({
   skip = false,
   compact = false,
   onMessageClick,
+  enableStar = false,
 }: EmailListWidgetProps) {
   const { messages, loading, error, oauthAuthUrl } = useGmail(query, !skip)
+  const { star, unstar } = useGmailWrite()
+  // Optimistic per-message star state layered over the fetched labelIds, plus
+  // an in-flight set to disable the button mid-request. Reverts on failure.
+  const [starOverride, setStarOverride] = useState<Record<string, boolean>>({})
+  const [starBusy, setStarBusy] = useState<Record<string, boolean>>({})
+
+  const toggleStar = useCallback(
+    async (m: GmailMessage, currentlyStarred: boolean) => {
+      const next = !currentlyStarred
+      setStarBusy((b) => ({ ...b, [m.id]: true }))
+      setStarOverride((o) => ({ ...o, [m.id]: next }))
+      const res = next ? await star(m.id) : await unstar(m.id)
+      if (!res.success) setStarOverride((o) => ({ ...o, [m.id]: currentlyStarred }))
+      setStarBusy((b) => ({ ...b, [m.id]: false }))
+    },
+    [star, unstar],
+  )
 
   if (skip) return null
 
@@ -83,9 +109,21 @@ export function EmailListWidget({
   return (
     <Section heading={heading}>
       <div className="divide-y divide-border/50 rounded-lg border border-border bg-card overflow-hidden">
-        {messages.map((m) => (
-          <EmailRow key={m.id} message={m} compact={compact} onClick={onMessageClick} />
-        ))}
+        {messages.map((m) => {
+          const starred = starOverride[m.id] ?? (m.labelIds?.includes('STARRED') ?? false)
+          return (
+            <EmailRow
+              key={m.id}
+              message={m}
+              compact={compact}
+              onClick={onMessageClick}
+              enableStar={enableStar}
+              starred={starred}
+              starBusy={!!starBusy[m.id]}
+              onToggleStar={() => toggleStar(m, starred)}
+            />
+          )
+        })}
       </div>
     </Section>
   )
@@ -109,10 +147,18 @@ function EmailRow({
   message,
   compact,
   onClick,
+  enableStar = false,
+  starred = false,
+  starBusy = false,
+  onToggleStar,
 }: {
   message: GmailMessage
   compact: boolean
   onClick?: (m: GmailMessage) => void
+  enableStar?: boolean
+  starred?: boolean
+  starBusy?: boolean
+  onToggleStar?: () => void
 }) {
   const headers = message.payload?.headers ?? []
   const get = (n: string) => headers.find((h) => h.name?.toLowerCase() === n.toLowerCase())?.value
@@ -161,6 +207,26 @@ function EmailRow({
           </p>
         )}
       </div>
+      {enableStar && (
+        <button
+          type="button"
+          // Star is a gmail.modify action; keep the row's outbound link from
+          // firing when the star is clicked.
+          onClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            onToggleStar?.()
+          }}
+          disabled={starBusy}
+          aria-pressed={starred}
+          title={starred ? 'Unstar' : 'Star'}
+          className="mt-1 flex-shrink-0 rounded p-0.5 hover:bg-secondary/30 disabled:opacity-50 transition-colors"
+        >
+          <Star
+            className={`w-3.5 h-3.5 ${starred ? 'fill-yellow-400 text-yellow-400' : 'text-muted-foreground/40'}`}
+          />
+        </button>
+      )}
       <ExternalLink className="w-3 h-3 text-muted-foreground/40 mt-1.5 flex-shrink-0" />
     </a>
   )

@@ -6,10 +6,10 @@
  * Dashboard widget, server search) flow through this single hook so
  * the OAuth-recovery + status-sync behavior is identical everywhere.
  *
- * Read-only — the only Gmail endpoints we ever touch from this hook
- * use the `gmail.readonly` scope. Compose / archive / label features
- * are not implemented (and Google hasn't approved a write scope for
- * this OAuth client anyway).
+ * Read-only — this hook only ever calls `google/gmail-inbox`, which uses
+ * the `gmail.readonly` scope. The write features (compose/reply, mark
+ * read/unread, archive, trash) live in the companion `useGmailWrite` hook
+ * and use the `gmail.modify` scope.
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react'

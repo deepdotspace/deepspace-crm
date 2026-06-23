@@ -1,50 +1,48 @@
 /**
- * Email tab — read-only Gmail inbox via gmail.readonly.
+ * Email tab — Gmail inbox for the signed-in user.
  *
- * The previous implementation sent mail via the @app.space email handle
- * (`email/send` integration, owner-billed). That product is unrelated
- * to Google Gmail; this tab is now a self-contained Gmail reader for
- * the signed-in user, exercising the per-user Google OAuth flow with
- * the **read-only** scope only.
+ * Reading uses the `gmail.readonly` scope. The CRM write actions
+ * (compose / reply, mark read/unread, archive, trash) use the broader
+ * `gmail.modify` scope, requested incrementally on first use. Both are
+ * per-user OAuth grants billed to the calling user (see integrations.ts).
  *
- * Why read-only only:
- *   The OAuth client (`deepspace-479511`) is verified by Google for
- *   `gmail.readonly`. Anything that touches `gmail.modify` (send,
- *   archive, label, mark-read) bumps the scope and changes the
- *   verification chain. To keep CASA Tier 2 scope intact this tab does
- *   NOT call gmail-send, gmail-trash, gmail-modify, etc.
+ * Scopes:
+ *   - gmail.readonly — list + read messages/threads (unchanged).
+ *   - gmail.modify   — send mail and mutate the mailbox (labels, trash).
+ *     gmail.modify cannot permanently delete (that needs the full
+ *     mail.google.com scope, which we deliberately do NOT request);
+ *     Trash here is recoverable.
  *
  * Flow:
- *   1. On mount: GET /api/integrations/status to see if google.gmailRead
- *      is true. If yes, fetch messages. If no, show "Connect Gmail".
- *   2. Connect calls google/gmail-list with no token → api-worker
- *      returns `requiresOAuth + authUrl` → popup → user grants
- *      `gmail.readonly` → status refreshes → messages load.
- *   3. Disconnect revokes via the platform endpoint.
- *
- * What's intentionally absent:
- *   - No Compose / Reply / Forward (would require gmail.send / modify).
- *   - No "mark as read" or label changes (would require gmail.modify).
- *   - No archive / trash / move (would require gmail.modify).
- *   The tab links out to mail.google.com for any action that needs
- *   write access.
+ *   1. On mount: GET /api/integrations/status. `gmailRead` gates the
+ *      inbox; `gmailModify` gates whether write actions are already
+ *      authorized (they still work without it — the first write triggers
+ *      an incremental consent that upgrades the grant).
+ *   2. Connect calls google/gmail-inbox with no token → api-worker
+ *      returns `requiresOAuth + authUrl` → popup → consent → messages load.
+ *   3. Write actions flow through useGmailWrite, which replays the request
+ *      after consent. Disconnect revokes via the platform endpoint.
  */
 
 import { useEffect, useState, useCallback } from 'react'
 import DOMPurify from 'dompurify'
 import { integration, useAuth, getAuthToken } from 'deepspace'
 import {
-  Mail, ExternalLink, RefreshCw, Plug, Unplug, Search, Inbox,
-  ChevronLeft, ChevronRight,
+  Mail, MailOpen, ExternalLink, RefreshCw, Plug, Unplug, Search, Inbox,
+  ChevronLeft, ChevronRight, Archive, Trash2, Reply, PenSquare, Loader2,
 } from 'lucide-react'
 import { Button } from '../components/ui'
+import { ComposeEmailDialog } from '../components/ComposeEmailDialog'
+import { useGmailWrite } from '../platform/useGmailWrite'
 
 interface GoogleStatus {
   connected: boolean
   gmailRead: boolean
+  gmailModify: boolean
   gmail: boolean
+  email?: string
 }
-const EMPTY_STATUS: GoogleStatus = { connected: false, gmailRead: false, gmail: false }
+const EMPTY_STATUS: GoogleStatus = { connected: false, gmailRead: false, gmailModify: false, gmail: false }
 
 interface GmailMessagePart {
   mimeType?: string
@@ -117,6 +115,15 @@ export default function EmailPage() {
   // list call; the value can fluctuate slightly between pages (it is an
   // estimate, not a count) — same behavior as mail.google.com.
   const [resultSizeEstimate, setResultSizeEstimate] = useState<number | null>(null)
+
+  // Gmail write surface (compose/reply, mark read/unread, archive, trash).
+  const { markRead, markUnread, archive, trash } = useGmailWrite()
+  // Compose dialog state. `null` = closed. `threadId` set = reply.
+  const [compose, setCompose] = useState<{
+    prefillTo?: string
+    prefillSubject?: string
+    threadId?: string
+  } | null>(null)
 
   // ── status ──
   useEffect(() => {
@@ -317,6 +324,87 @@ export default function EmailPage() {
     }
   }, [refreshStatus])
 
+  // ── write actions ──
+  //
+  // Each action updates the visible list optimistically, then issues the
+  // gmail.modify call. On failure we surface the error and refetch the
+  // current page to resync. After a successful write that may have changed
+  // the user's scope (first-time consent), we refresh status so the badge
+  // reflects gmailModify.
+  const applyResult = useCallback(
+    (res: { success: boolean; error?: string; cancelled?: boolean }, action: string) => {
+      if (res.success) {
+        // A first-time write may have just upgraded the grant to gmail.modify.
+        refreshStatus()
+        return true
+      }
+      // Failed or cancelled — resync the list so the optimistic change is
+      // reverted. Only surface an error message when it actually failed
+      // (cancelling the consent popup is not an error worth shouting about).
+      if (!res.cancelled) {
+        setError(`Couldn't ${action}: ${res.error ?? 'unknown error'}`)
+      }
+      refreshCurrentPage()
+      return false
+    },
+    [refreshStatus, refreshCurrentPage],
+  )
+
+  const onToggleRead = useCallback(
+    async (message: GmailMessage) => {
+      const isUnread = message.labelIds?.includes('UNREAD') ?? false
+      // Optimistic relabel.
+      setMessages((prev) =>
+        prev?.map((m) =>
+          m.id === message.id
+            ? {
+                ...m,
+                labelIds: isUnread
+                  ? (m.labelIds ?? []).filter((l) => l !== 'UNREAD')
+                  : [...(m.labelIds ?? []), 'UNREAD'],
+              }
+            : m,
+        ) ?? prev,
+      )
+      const res = isUnread ? await markRead(message.id) : await markUnread(message.id)
+      applyResult(res, isUnread ? 'mark as read' : 'mark as unread')
+    },
+    [markRead, markUnread, applyResult],
+  )
+
+  const onArchive = useCallback(
+    async (message: GmailMessage) => {
+      setMessages((prev) => prev?.filter((m) => m.id !== message.id) ?? prev)
+      const res = await archive(message.id)
+      applyResult(res, 'archive')
+    },
+    [archive, applyResult],
+  )
+
+  const onTrash = useCallback(
+    async (message: GmailMessage) => {
+      setMessages((prev) => prev?.filter((m) => m.id !== message.id) ?? prev)
+      const res = await trash(message.id)
+      applyResult(res, 'move to Trash')
+    },
+    [trash, applyResult],
+  )
+
+  // Open the compose dialog as a reply to a message: prefill recipient from
+  // the original sender, prefix the subject, and carry the threadId so the
+  // SDK threads it for the recipient (In-Reply-To / References).
+  const onReply = useCallback((message: GmailMessage) => {
+    const headers = message.payload?.headers ?? []
+    const getHeader = (n: string) =>
+      headers.find((h) => h.name?.toLowerCase() === n.toLowerCase())?.value ?? ''
+    const fromRaw = getHeader('From')
+    const m = /<([^>]+)>/.exec(fromRaw)
+    const replyTo = m ? m[1] : fromRaw.trim()
+    const subj = getHeader('Subject')
+    const prefillSubject = /^re:/i.test(subj) ? subj : `Re: ${subj}`
+    setCompose({ prefillTo: replyTo, prefillSubject, threadId: message.threadId ?? message.id })
+  }, [])
+
   // ── render ──
   if (!isSignedIn) {
     return (
@@ -338,7 +426,7 @@ export default function EmailPage() {
         <div>
           <h1 className="text-lg font-semibold text-foreground">Email</h1>
           <p className="text-sm text-muted-foreground">
-            Read-only Gmail · status:{' '}
+            Gmail · status:{' '}
             <span
               className={
                 status.gmailRead
@@ -348,11 +436,25 @@ export default function EmailPage() {
             >
               {statusLoading ? 'checking…' : status.gmailRead ? 'connected' : 'not connected'}
             </span>
+            {status.gmailRead && (
+              <span className="ml-1 text-muted-foreground">
+                · {status.gmailModify ? 'read & write' : 'read-only (write on first action)'}
+              </span>
+            )}
           </p>
         </div>
         <div className="flex gap-2">
           {status.gmailRead && (
             <>
+              <Button
+                size="sm"
+                onClick={() => setCompose({})}
+                disabled={loadingMessages}
+                className="gap-1.5"
+              >
+                <PenSquare className="w-3.5 h-3.5" />
+                Compose
+              </Button>
               <Button
                 size="sm"
                 variant="outline"
@@ -378,12 +480,14 @@ export default function EmailPage() {
         </div>
       </div>
 
-      {/* Read-only notice */}
+      {/* Scope notice */}
       <div className="flex items-start gap-2 mb-4 px-3 py-2 bg-secondary/30 border border-border rounded-lg text-xs text-muted-foreground">
         <Mail className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
         <span>
-          Read-only — this tab uses the <code>gmail.readonly</code> scope.
-          Compose, reply, archive, and labels open in{' '}
+          Reading uses the <code>gmail.readonly</code> scope. Compose, reply,
+          mark read/unread, archive, and trash use <code>gmail.modify</code>,
+          requested the first time you take a write action. We never permanently
+          delete mail — Trash is recoverable in{' '}
           <a
             href="https://mail.google.com"
             target="_blank"
@@ -403,8 +507,9 @@ export default function EmailPage() {
           </div>
           <h2 className="text-lg font-semibold text-foreground mb-1">Connect Gmail</h2>
           <p className="text-sm text-muted-foreground text-center max-w-sm mb-4">
-            Grant read-only access to your Gmail inbox. We never send, modify,
-            or delete messages — read-only means read-only.
+            Grant access to your Gmail inbox to read mail here. Compose, reply,
+            archive, and trash are available once connected and ask for write
+            permission the first time you use them.
           </p>
           <Button onClick={resetToFirstPage} disabled={loadingMessages} className="gap-2">
             <Plug className="w-4 h-4" />
@@ -491,7 +596,14 @@ export default function EmailPage() {
           ) : (
             <div className="divide-y divide-border/50">
               {filtered.map((m) => (
-                <MessageRow key={m.id} message={m} />
+                <MessageRow
+                  key={m.id}
+                  message={m}
+                  onReply={onReply}
+                  onToggleRead={onToggleRead}
+                  onArchive={onArchive}
+                  onTrash={onTrash}
+                />
               ))}
             </div>
           )}
@@ -503,12 +615,71 @@ export default function EmailPage() {
           Loading messages…
         </div>
       )}
+
+      {/* Compose / reply — sends through the user's Gmail (gmail.modify). */}
+      <ComposeEmailDialog
+        open={compose !== null}
+        onClose={() => setCompose(null)}
+        prefillTo={compose?.prefillTo}
+        prefillSubject={compose?.prefillSubject}
+        threadId={compose?.threadId}
+        onSent={() => {
+          refreshStatus()
+          refreshCurrentPage()
+        }}
+      />
     </div>
   )
 }
 
-function MessageRow({ message }: { message: GmailMessage }) {
+// Small icon button used in the message-row action toolbar. Stops click
+// propagation so acting on a message never toggles its thread open.
+function RowAction({
+  label,
+  onClick,
+  disabled,
+  children,
+}: {
+  label: string
+  onClick: () => void
+  disabled?: boolean
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      disabled={disabled}
+      onClick={(e) => {
+        e.stopPropagation()
+        onClick()
+      }}
+      className="inline-flex items-center justify-center rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+    >
+      {children}
+    </button>
+  )
+}
+
+function MessageRow({
+  message,
+  onReply,
+  onToggleRead,
+  onArchive,
+  onTrash,
+}: {
+  message: GmailMessage
+  onReply: (m: GmailMessage) => void
+  onToggleRead: (m: GmailMessage) => void | Promise<void>
+  onArchive: (m: GmailMessage) => void | Promise<void>
+  onTrash: (m: GmailMessage) => void | Promise<void>
+}) {
   const [open, setOpen] = useState(false)
+  // Disables the action toolbar while a mutation is in flight, preventing
+  // double-submits (e.g. two archive clicks racing).
+  const [busy, setBusy] = useState(false)
+  const isUnread = message.labelIds?.includes('UNREAD') ?? false
   // Lazily-fetched full thread (all messages in this conversation).
   // Single-message rendering is the wrong UX — clicking a row in
   // Gmail's UI opens the entire thread in chronological order, with
@@ -554,36 +725,86 @@ function MessageRow({ message }: { message: GmailMessage }) {
     }
   }, [open, thread, message])
 
+  // Run an action, disabling the toolbar while it's in flight. (React 19
+  // no longer warns on setState after unmount, which happens when an
+  // archive/trash optimistically removes this row from the parent list.)
+  const run = useCallback(async (fn: () => void | Promise<void>) => {
+    setBusy(true)
+    try { await fn() } finally { setBusy(false) }
+  }, [])
+
   return (
-    <div className="flex items-start gap-3 p-4 hover:bg-secondary/10 transition-colors">
-      <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0 mt-0.5 text-xs font-medium text-primary">
+    <div className="group flex items-start gap-3 p-4 hover:bg-secondary/10 transition-colors">
+      <div className="relative w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0 mt-0.5 text-xs font-medium text-primary">
         {from.initial}
+        {isUnread && (
+          <span
+            className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-primary ring-2 ring-card"
+            aria-label="Unread"
+          />
+        )}
       </div>
       <div className="flex-1 min-w-0">
-        <button
-          type="button"
-          onClick={onToggle}
-          className="block w-full text-left"
-          aria-expanded={open}
-        >
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-foreground truncate">
-              {from.display}
-            </span>
-            {thread && thread.length > 1 && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-secondary/50 text-muted-foreground flex-shrink-0">
-                {thread.length}
+        <div className="flex items-start gap-2">
+          <button
+            type="button"
+            onClick={onToggle}
+            className="block flex-1 min-w-0 text-left"
+            aria-expanded={open}
+          >
+            <div className="flex items-center gap-2">
+              <span className={`text-sm truncate ${isUnread ? 'font-semibold text-foreground' : 'font-medium text-foreground'}`}>
+                {from.display}
               </span>
+              {thread && thread.length > 1 && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-secondary/50 text-muted-foreground flex-shrink-0">
+                  {thread.length}
+                </span>
+              )}
+              <span className="text-xs text-muted-foreground flex-shrink-0 ml-auto">{dateStr}</span>
+            </div>
+            <div className={`text-sm truncate mt-0.5 ${isUnread ? 'font-medium text-foreground' : 'text-foreground'}`}>
+              {decodeHtmlEntities(subject)}
+            </div>
+            {!open && decodedSnippet && (
+              <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{decodedSnippet}</p>
             )}
-            <span className="text-xs text-muted-foreground flex-shrink-0 ml-auto">{dateStr}</span>
+          </button>
+
+          {/* Action toolbar — revealed on hover; always visible while busy. */}
+          <div
+            className={`flex items-center gap-0.5 flex-shrink-0 transition-opacity ${busy ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100'}`}
+          >
+            <RowAction
+              label="Reply"
+              disabled={busy}
+              onClick={() => onReply(message)}
+            >
+              <Reply className="w-3.5 h-3.5" />
+            </RowAction>
+            <RowAction
+              label={isUnread ? 'Mark as read' : 'Mark as unread'}
+              disabled={busy}
+              onClick={() => run(() => onToggleRead(message))}
+            >
+              {isUnread ? <MailOpen className="w-3.5 h-3.5" /> : <Mail className="w-3.5 h-3.5" />}
+            </RowAction>
+            <RowAction
+              label="Archive"
+              disabled={busy}
+              onClick={() => run(() => onArchive(message))}
+            >
+              <Archive className="w-3.5 h-3.5" />
+            </RowAction>
+            <RowAction
+              label="Move to Trash"
+              disabled={busy}
+              onClick={() => run(() => onTrash(message))}
+            >
+              {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+            </RowAction>
           </div>
-          <div className="text-sm text-foreground truncate mt-0.5">
-            {decodeHtmlEntities(subject)}
-          </div>
-          {!open && decodedSnippet && (
-            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{decodedSnippet}</p>
-          )}
-        </button>
+        </div>
 
         {open && (
           <div className="mt-3 space-y-2">

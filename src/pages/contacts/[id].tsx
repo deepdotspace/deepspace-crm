@@ -3,6 +3,7 @@ import { useMemo, useState, useCallback } from 'react'
 import { useCrm } from '../../platform/CrmPlatformProvider'
 import { Badge, Button, Input } from '../../components/ui'
 import { AddActivityDialog } from '../../components/AddActivityDialog'
+import { ComposeEmailDialog } from '../../components/ComposeEmailDialog'
 import { EmailListWidget } from '../../components/EmailListWidget'
 import {
   ArrowLeft, Building2, Mail, Phone, Calendar, MapPin,
@@ -47,6 +48,7 @@ export default function ContactDetailPage() {
   const [editing, setEditing] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [showAddActivity, setShowAddActivity] = useState(false)
+  const [showCompose, setShowCompose] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
   const person = useMemo(() => people.find(p => p.id === id), [people, id])
@@ -242,7 +244,13 @@ export default function ContactDetailPage() {
               address to query against. */}
           {person.email && (
             <div className="bg-card border border-border rounded-xl p-5">
-              <h2 className="text-sm font-semibold text-foreground mb-4">Emails</h2>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-sm font-semibold text-foreground">Emails</h2>
+                <Button size="sm" variant="outline" onClick={() => setShowCompose(true)}>
+                  <Mail className="w-3.5 h-3.5" />
+                  Email
+                </Button>
+              </div>
               <EmailListWidget
                 query={{
                   q: `from:${person.email} OR to:${person.email}`,
@@ -251,6 +259,7 @@ export default function ContactDetailPage() {
                   format: 'metadata',
                 }}
                 emptyText={`No emails with ${person.email}.`}
+                enableStar
               />
             </div>
           )}
@@ -345,6 +354,15 @@ export default function ContactDetailPage() {
         open={showAddActivity}
         onClose={() => setShowAddActivity(false)}
         prefillContactId={person.id}
+      />
+
+      <ComposeEmailDialog
+        open={showCompose}
+        onClose={() => setShowCompose(false)}
+        prefillTo={person.email ?? ''}
+        contactName={person.name}
+        contactId={person.id}
+        companyId={person.companyId ?? undefined}
       />
     </div>
   )
