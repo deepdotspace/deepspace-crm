@@ -17,6 +17,7 @@ import { Link } from 'react-router-dom'
 import { Inbox, Mail, ExternalLink, Star } from 'lucide-react'
 import { useGmail, type GmailQuery, type GmailMessage } from '../platform/useGmail'
 import { useGmailWrite } from '../platform/useGmailWrite'
+import { useToast } from './ui'
 
 interface EmailListWidgetProps {
   /** Gmail query — see useGmail / Gmail search syntax. */
@@ -50,6 +51,7 @@ export function EmailListWidget({
 }: EmailListWidgetProps) {
   const { messages, loading, error, oauthAuthUrl } = useGmail(query, !skip)
   const { star, unstar } = useGmailWrite()
+  const toast = useToast()
   // Optimistic per-message star state layered over the fetched labelIds, plus
   // an in-flight set to disable the button mid-request. Reverts on failure.
   const [starOverride, setStarOverride] = useState<Record<string, boolean>>({})
@@ -61,10 +63,21 @@ export function EmailListWidget({
       setStarBusy((b) => ({ ...b, [m.id]: true }))
       setStarOverride((o) => ({ ...o, [m.id]: next }))
       const res = next ? await star(m.id) : await unstar(m.id)
-      if (!res.success) setStarOverride((o) => ({ ...o, [m.id]: currentlyStarred }))
+      if (!res.success) {
+        // Roll back the optimistic toggle and surface why — a silent revert
+        // looks like the click did nothing. `cancelled` means the user
+        // dismissed the consent popup, which isn't an error worth a toast.
+        setStarOverride((o) => ({ ...o, [m.id]: currentlyStarred }))
+        if (!res.cancelled) {
+          toast.error(
+            next ? "Couldn't star email" : "Couldn't unstar email",
+            res.error ?? 'Gmail write failed',
+          )
+        }
+      }
       setStarBusy((b) => ({ ...b, [m.id]: false }))
     },
-    [star, unstar],
+    [star, unstar, toast],
   )
 
   if (skip) return null

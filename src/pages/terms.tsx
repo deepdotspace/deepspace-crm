@@ -84,7 +84,17 @@ export default function TermsPage() {
           </code>{' '}
           scope, which the Service uses only to create and manage the calendar
           events for meetings you set up — never to read or change your calendar
-          without an explicit action by you. You may revoke this access at any time by clicking
+          without an explicit action by you. When you choose to import your
+          contacts, you additionally grant the{' '}
+          <code className="rounded bg-secondary/40 px-1.5 py-0.5 text-xs">
+            contacts.readonly
+          </code>{' '}
+          scope, which the Service uses only to read your Google Contacts so you
+          can import selected entries into the CRM — a one-way, read-only import.
+          The Service never writes to, changes, or deletes your Google Contacts
+          (it does not request the read/write{' '}
+          <code className="rounded bg-secondary/40 px-1.5 py-0.5 text-xs">contacts</code>{' '}
+          scope). You may revoke this access at any time by clicking
           "Disconnect" in the Email tab or by visiting{' '}
           <a
             href="https://myaccount.google.com/permissions"

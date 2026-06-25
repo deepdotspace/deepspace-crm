@@ -164,6 +164,37 @@ export default function PrivacyPage() {
       </section>
 
       <section className="mt-8 space-y-4">
+        <h2 className="text-base font-semibold">Google Contacts data</h2>
+        <p>
+          When you choose to import your contacts, we request the{' '}
+          <code className="rounded bg-secondary/40 px-1.5 py-0.5 text-xs">
+            contacts.readonly
+          </code>{' '}
+          scope. We use it only to:
+        </p>
+        <ul className="list-disc pl-5 space-y-2">
+          <li>
+            Read your Google Contacts (name, email, phone, company, job title,
+            and notes) and show them in the import dialog so you can choose which
+            to add.
+          </li>
+          <li>
+            Create CRM contact records for the entries you select, skipping any
+            that already exist in the CRM.
+          </li>
+        </ul>
+        <p>
+          This is a one-way, read-only import that runs only when you click
+          "Import from Google" — we never write to, change, or delete your
+          Google Contacts (we do not request the read/write{' '}
+          <code className="rounded bg-secondary/40 px-1.5 py-0.5 text-xs">contacts</code>{' '}
+          scope), and no automated agent has access to this capability. Only the
+          contacts you explicitly import are stored, as ordinary CRM records you
+          can edit or delete at any time.
+        </p>
+      </section>
+
+      <section className="mt-8 space-y-4">
         <h2 className="text-base font-semibold">Limited Use disclosure</h2>
         <p className="rounded-md border border-border bg-secondary/20 p-3">
           DeepSpace CRM's use and transfer to any other app of information

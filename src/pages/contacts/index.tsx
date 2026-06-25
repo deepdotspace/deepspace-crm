@@ -4,9 +4,10 @@ import { useAuth, AuthOverlay } from 'deepspace'
 import { useCrm } from '../../platform/CrmPlatformProvider'
 import { Button, Badge } from '../../components/ui'
 import { AddContactDialog } from '../../components/AddContactDialog'
+import { ImportGoogleContactsDialog } from '../../components/ImportGoogleContactsDialog'
 import {
   Plus, Search, Building2, Mail, Phone, Calendar,
-  Users, Filter, ArrowUpDown, ChevronRight,
+  Users, Filter, ArrowUpDown, ChevronRight, Download,
 } from 'lucide-react'
 import type { Person } from '../../platform/types'
 
@@ -45,8 +46,10 @@ export default function ContactsPage() {
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState<string>('all')
   const [showAdd, setShowAdd] = useState(false)
+  const [showImport, setShowImport] = useState(false)
   const [showAuth, setShowAuth] = useState(false)
   const handleAdd = () => (isSignedIn ? setShowAdd(true) : setShowAuth(true))
+  const handleImport = () => (isSignedIn ? setShowImport(true) : setShowAuth(true))
   const [sortBy, setSortBy] = useState<'name' | 'recent' | 'company'>('name')
 
   const companyMap = useMemo(() => {
@@ -128,10 +131,16 @@ export default function ContactsPage() {
           <h1 className="text-lg font-semibold text-foreground">Contacts</h1>
           <p className="text-sm text-muted-foreground">{people.length} total contacts</p>
         </div>
-        <Button data-testid="add-contact-btn" size="sm" onClick={handleAdd}>
-          <Plus className="w-3.5 h-3.5" />
-          Add Contact
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={handleImport}>
+            <Download className="w-3.5 h-3.5" />
+            Import from Google
+          </Button>
+          <Button data-testid="add-contact-btn" size="sm" onClick={handleAdd}>
+            <Plus className="w-3.5 h-3.5" />
+            Add Contact
+          </Button>
+        </div>
       </div>
 
       {/* Filters bar */}
@@ -254,6 +263,7 @@ export default function ContactsPage() {
       )}
 
       <AddContactDialog open={showAdd} onClose={() => setShowAdd(false)} />
+      <ImportGoogleContactsDialog open={showImport} onClose={() => setShowImport(false)} />
       {showAuth && <AuthOverlay onClose={() => setShowAuth(false)} />}
     </div>
   )
