@@ -9,7 +9,7 @@
 import { tool } from 'ai'
 import type { ToolSet } from 'ai'
 import { z } from 'zod'
-import { BUILT_IN_TOOLS } from 'deepspace/worker'
+import { BUILT_IN_TOOLS, applyAiToolDefaults } from 'deepspace/worker'
 import type { ToolSchema, CollectionSchema } from 'deepspace/worker'
 
 type ToolExecutor = (toolName: string, params: Record<string, unknown>) => Promise<unknown>
@@ -73,7 +73,11 @@ export function buildTools(executor: ToolExecutor): ToolSet {
     tools[safeName] = tool({
       description: def.description,
       inputSchema: buildZodSchema(def),
-      execute: async (params: Record<string, unknown>) => executor(def.name, params),
+      // Apply assistant-only param defaults (e.g. records.query page size) here
+      // in the AI tool layer, so internal record readers that hit the tools
+      // dispatch directly stay unbounded.
+      execute: async (params: Record<string, unknown>) =>
+        executor(def.name, applyAiToolDefaults(def.name, params)),
     })
   }
 

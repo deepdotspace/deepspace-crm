@@ -6,10 +6,19 @@ test.describe('API tests', () => {
     expect(res.ok()).toBeTruthy()
   })
 
-  test('WebSocket endpoint exists', async ({ page }) => {
-    await page.goto('/')
-    // Wait for the app to connect its WebSocket (it auto-connects on mount)
-    await page.waitForSelector('[data-testid="app-navigation"]', { timeout: 15000 })
-    // If the app loaded and connected, the WS endpoint works
+  test('integrations catalog proxies to api-worker', async ({ request }) => {
+    const res = await request.get('/api/integrations')
+    expect(res.ok()).toBeTruthy()
+    const body = (await res.json()) as { integrations?: Record<string, unknown> }
+    expect(body.integrations).toBeTruthy()
+  })
+
+  // Exercises the RecordRoom DO stub path (`app:${DEEPSPACE_APP_ID}`).
+  // /api/debug/* is only exposed when ALLOW_DEBUG_ROUTES=true, which
+  // `deepspace dev` / `deepspace test` write into .dev.vars — so this runs
+  // in tests but the route 404s in production.
+  test('record room debug status responds (dev only)', async ({ request }) => {
+    const res = await request.get('/api/debug/status')
+    expect(res.ok()).toBeTruthy()
   })
 })

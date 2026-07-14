@@ -54,7 +54,7 @@ const ALLOWED_MODELS: Record<string, 'anthropic' | 'openai' | 'cerebras'> = {
 const DEFAULT_MODEL = 'claude-sonnet-4-6'
 
 function recordRoomStub(env: Env): DurableObjectStub {
-  return env.RECORD_ROOMS.get(env.RECORD_ROOMS.idFromName(`app:${env.APP_NAME}`))
+  return env.RECORD_ROOMS.get(env.RECORD_ROOMS.idFromName(`app:${env.DEEPSPACE_APP_ID}`))
 }
 
 // Cap on user-supplied content length. Blocks accidental DoS via megabyte payloads.

@@ -26,7 +26,12 @@ bindings = [
 binding = "FILES"
 bucket_name = "auto"
 
+# Immutable app identity (docs: app-identity registry). Data scope, tokens,
+# secrets, and collaborators all key to it. Renames are safe. This app predates
+# the identity registry, so its backfilled id is its name (verified against
+# the platform's /api/apps registry).
 [vars]
+DEEPSPACE_APP_ID = "deepspace-crm"
 APP_NAME = "deepspace-crm"
 
 [dev]

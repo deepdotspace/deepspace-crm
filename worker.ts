@@ -69,7 +69,7 @@ export class AppPresenceRoom extends PresenceRoom<Env> {}
  * Tasks are configured at construction time. The DO alarm fires at the
  * next interval / cron-expression match, calls `onTask(name)`, and
  * records the execution in its `cron_history` table. Admin clients can
- * watch via the `useCronMonitor('app:<APP_NAME>')` hook.
+ * watch via the `useCronMonitor('app:<APP_ID>')` hook.
  */
 export class AppCronRoom extends CronRoom<Env> {
   constructor(state: DurableObjectState, env: Env) {
@@ -95,7 +95,15 @@ export interface Env extends DOBindings<typeof __DO_MANIFEST__> {
    */
   PLATFORM_WORKER?: Fetcher
   PLATFORM_WORKER_URL?: string
-  APP_IDENTITY_TOKEN: string
+  /**
+   * HMAC token identifying this app to the platform (minted at deploy time;
+   * `deepspace dev` fetches it into .dev.vars). Absent until the app's first
+   * deploy registers it — identity headers are only attached when set, so
+   * pre-deploy calls fail closed with the upstream's "missing app identity"
+   * error instead of a misleading "invalid token" one (an undefined binding
+   * coerces to the header string "undefined", which reads as tampered).
+   */
+  APP_IDENTITY_TOKEN?: string
   /**
    * Upstream api-worker. Same pattern as PLATFORM_WORKER above —
    * binding in prod, URL fallback in dev.
@@ -106,6 +114,8 @@ export interface Env extends DOBindings<typeof __DO_MANIFEST__> {
   AUTH_JWT_ISSUER: string
   AUTH_WORKER_URL: string
   APP_NAME: string
+  /** Immutable app id — record scope + platform identity key to this. */
+  DEEPSPACE_APP_ID: string
   OWNER_USER_ID: string
   /**
    * Long-lived JWT minted for the app owner at deploy time. Server-side
@@ -190,6 +200,20 @@ async function resolveAuth(req: Request, env: Env): Promise<VerifyResult | null>
   return (await verifyJwt(jwtConfig(env), token)).result
 }
 
+/**
+ * Re-assert this app's identity headers on a proxied request, fail-closed.
+ * Never forwards caller-supplied identity; attaches ours only when the app
+ * has a token (absent pre-first-deploy — see Env.APP_IDENTITY_TOKEN).
+ */
+function reassertAppIdentity(headers: Headers, env: Env): void {
+  headers.delete('x-app-identity-token')
+  headers.delete('x-app-id')
+  headers.delete('x-app-name')
+  if (!env.APP_IDENTITY_TOKEN) return
+  headers.set('x-app-identity-token', env.APP_IDENTITY_TOKEN)
+  headers.set('x-app-id', env.DEEPSPACE_APP_ID)
+}
+
 // ---------------------------------------------------------------------------
 // Social OAuth redirect + code exchange
 // ---------------------------------------------------------------------------
@@ -265,7 +289,7 @@ app.all('/api/debug/*', async (c) => {
   if (c.env.ALLOW_DEBUG_ROUTES !== 'true') {
     return c.notFound()
   }
-  const stub = c.env.RECORD_ROOMS.get(c.env.RECORD_ROOMS.idFromName(`app:${c.env.APP_NAME}`))
+  const stub = c.env.RECORD_ROOMS.get(c.env.RECORD_ROOMS.idFromName(`app:${c.env.DEEPSPACE_APP_ID}`))
   // Forward verbatim, preserving method, headers, body, and the full URL
   // (the DO's debug handler dispatches on url.pathname).
   return stub.fetch(c.req.raw)
@@ -345,6 +369,15 @@ app.all('/api/integrations/:name/:endpoint', async (c) => {
   } else {
     const token = c.req.header('Authorization')?.slice(7)
     if (token) headers['Authorization'] = `Bearer ${token}`
+  }
+
+  // Identify this app to the api-worker (HMAC-verified) so integrations that
+  // scope per app (e.g. Composio connections) isolate this app from others.
+  // Pre-first-deploy there is no token yet — send nothing so the api-worker
+  // answers 400 missing_app_identity rather than 401 for a garbage token.
+  if (c.env.APP_IDENTITY_TOKEN) {
+    headers['x-app-identity-token'] = c.env.APP_IDENTITY_TOKEN
+    headers['x-app-id'] = c.env.DEEPSPACE_APP_ID
   }
 
   const hasBody = c.req.method !== 'GET' && c.req.method !== 'HEAD'
@@ -461,7 +494,7 @@ app.post('/api/actions/:name', async (c) => {
   const params = await c.req.json<Record<string, unknown>>()
   const callerJwt = c.req.header('Authorization')!.slice(7)
   const tools = createActionTools(c.env, auth.userId, callerJwt)
-  const result = await action({ userId: auth.userId, params, tools, env: c.env })
+  const result = await action({ userId: auth.userId, params, tools, env: c.env, callerJwt })
   return c.json(result as unknown as Record<string, unknown>)
 })
 
@@ -487,8 +520,12 @@ app.all('/api/files/*', async (c) => {
   platformUrl.pathname = url.pathname.replace('/api/files', '/internal/files')
 
   const headers = new Headers(c.req.raw.headers)
-  headers.set('x-app-identity-token', c.env.APP_IDENTITY_TOKEN)
-  headers.set('x-app-name', c.env.APP_NAME)
+  // Strip any caller-supplied user id before conditionally re-adding the
+  // verified one — the platform trusts this header (it arrives with our HMAC
+  // identity token) to scope `?scope=self` keys, so a spoofed passthrough
+  // would let an unauthenticated browser read another user's files.
+  headers.delete('x-user-id')
+  reassertAppIdentity(headers, c.env)
   if (userId) headers.set('x-user-id', userId)
 
   const resp = await platformWorkerFetch(
@@ -519,7 +556,7 @@ app.all('/api/files/*', async (c) => {
 
 // ---------------------------------------------------------------------------
 // /_deepspace/* — same-origin proxy to api-worker for authenticated SDK
-// hooks. Attaches APP_IDENTITY_TOKEN + APP_NAME so the browser never sees
+// hooks. Attaches APP_IDENTITY_TOKEN + the app id so the browser never sees
 // the platform secret. Every request requires a signed user JWT.
 //
 // SECURITY: exact (method, path) allowlist — not a prefix match. A prefix
@@ -532,10 +569,6 @@ app.all('/api/files/*', async (c) => {
 interface ProxyRoute {
   method: string
   path: string
-  /** Skip the user-JWT gate. Default false. Pricing tables are public. */
-  publicRead?: boolean
-  /** Inject `?appName=...` (from env) into the forwarded URL. Default false. */
-  injectAppName?: boolean
 }
 
 const BROWSER_PROXY_ROUTES: ReadonlyArray<ProxyRoute> = [
@@ -558,26 +591,22 @@ app.all('/_deepspace/*', async (c) => {
     return c.json({ error: 'not_found' }, 404)
   }
 
-  // Public-read routes (pricing tables) skip the JWT gate. Everything else
-  // requires a signed-in user.
-  let auth: Awaited<ReturnType<typeof resolveAuth>> | null = null
-  if (!route.publicRead) {
-    auth = await resolveAuth(c.req.raw, c.env)
-    if (!auth?.userId) return c.json({ error: 'unauthorized' }, 401)
-  }
+  // Every proxied route requires a signed-in user.
+  const auth = await resolveAuth(c.req.raw, c.env)
+  if (!auth?.userId) return c.json({ error: 'unauthorized' }, 401)
 
+  // OVERWRITE any caller-supplied appId — a request to
+  // `/_deepspace/subscriptions/plans?appId=other_app` must never reach the
+  // platform with someone else's id.
   const forwardedParams = new URLSearchParams(url.search)
-  if (route.injectAppName) {
-    forwardedParams.set('appName', c.env.APP_NAME)
-  }
+  forwardedParams.set('appId', c.env.DEEPSPACE_APP_ID)
   const queryString = forwardedParams.toString()
   const apiPath =
     url.pathname.replace('/_deepspace/', '/api/') + (queryString ? `?${queryString}` : '')
 
   const headers = new Headers(c.req.raw.headers)
   headers.delete('x-user-id')
-  headers.set('x-app-identity-token', c.env.APP_IDENTITY_TOKEN)
-  headers.set('x-app-name', c.env.APP_NAME)
+  reassertAppIdentity(headers, c.env)
   if (auth?.userId) headers.set('x-user-id', auth.userId)
 
   return apiWorkerFetch(c.env, apiPath, {
@@ -606,7 +635,7 @@ app.get('*', async (c) => {
 // =============================================================================
 
 function createActionTools(env: Env, userId: string, callerJwt: string): ActionTools {
-  const stub = env.RECORD_ROOMS.get(env.RECORD_ROOMS.idFromName(`app:${env.APP_NAME}`))
+  const stub = env.RECORD_ROOMS.get(env.RECORD_ROOMS.idFromName(`app:${env.DEEPSPACE_APP_ID}`))
 
   // Internal helper — DO returns `ActionResult<unknown>`. Callers below
   // cast to the precisely-typed result for each operation. The cast is
@@ -630,7 +659,7 @@ function createActionTools(env: Env, userId: string, callerJwt: string): ActionT
   async function callIntegration<T>(
     endpoint: string,
     data?: unknown,
-  ): Promise<ActionResult<{ response: T; status?: number }>> {
+  ): Promise<ActionResult<T>> {
     const integrationName = endpoint.split('/')[0]
     const billingMode = integrations[integrationName]?.billing ?? 'developer'
 
@@ -646,17 +675,19 @@ function createActionTools(env: Env, userId: string, callerJwt: string): ActionT
       },
       body: JSON.stringify(data ?? {}),
     })
-    return res.json() as Promise<ActionResult<{ response: T; status?: number }>>
+    return res.json() as Promise<ActionResult<T>>
   }
 
   return {
-    create: (collection, data) => execTool('records.create', { collection, data }),
+    create: (collection, data, recordId) =>
+      execTool('records.create', { collection, data, recordId }),
     update: (collection, recordId, data) =>
       execTool('records.update', { collection, recordId, data }),
     remove: (collection, recordId) => execTool('records.delete', { collection, recordId }),
     get: (collection, recordId) => execTool('records.get', { collection, recordId }),
     query: (collection, options) => execTool('records.query', { collection, ...options }),
     integration: callIntegration,
+    registerUser: (opts) => execTool('users.register', { ...opts }),
   }
 }
 

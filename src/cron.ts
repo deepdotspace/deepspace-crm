@@ -19,7 +19,7 @@
  *   ]
  *
  *   export async function runTask(name: string, env: Env): Promise<void> {
- *     const ctx = buildCronContext(env, env.OWNER_USER_ID, `app:${env.APP_NAME}`)
+ *     const ctx = buildCronContext(env, env.OWNER_USER_ID, `app:${env.DEEPSPACE_APP_ID}`)
  *     if (name === 'heartbeat') {
  *       // …
  *     }

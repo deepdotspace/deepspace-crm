@@ -12,7 +12,7 @@ import { RecordProvider, RecordScope } from 'deepspace'
 import { ToastProvider } from '../components/ui'
 import Navigation from '../components/Navigation'
 import { CrmPlatformProvider } from '../platform/CrmPlatformProvider'
-import { APP_NAME } from '../constants'
+import { APP_ID } from '../constants'
 import { schemas } from '../schemas'
 
 // Routes that render WITHOUT auth or the RecordRoom mounted. Required so
@@ -132,11 +132,11 @@ function AuthGate({ children }: { children: ReactNode }) {
   // the SDK is the only thing that writes the URL — and it always
   // writes the user's own scope here). Belt-and-suspenders alongside
   // schema-level permissions.
-  const roomId = `app:${APP_NAME}:user:${user.id}`
+  const roomId = `app:${APP_ID}:user:${user.id}`
 
   return (
     <RecordProvider>
-      <RecordScope roomId={roomId} schemas={schemas} appId={APP_NAME}>
+      <RecordScope roomId={roomId} schemas={schemas} appId={APP_ID}>
         {children}
       </RecordScope>
     </RecordProvider>
