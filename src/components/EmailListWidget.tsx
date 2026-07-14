@@ -63,6 +63,11 @@ export function EmailListWidget({
       setStarBusy((b) => ({ ...b, [m.id]: true }))
       setStarOverride((o) => ({ ...o, [m.id]: next }))
       const res = next ? await star(m.id) : await unstar(m.id)
+      if (res.success) {
+        // Name the real mailbox mutation — the STARRED label just changed in
+        // the user's Gmail, and the toast makes that observable.
+        toast.success(next ? 'Starred in Gmail' : 'Star removed in Gmail')
+      }
       if (!res.success) {
         // Roll back the optimistic toggle and surface why — a silent revert
         // looks like the click did nothing. `cancelled` means the user
@@ -232,11 +237,11 @@ function EmailRow({
           }}
           disabled={starBusy}
           aria-pressed={starred}
-          title={starred ? 'Unstar' : 'Star'}
-          className="mt-1 flex-shrink-0 rounded p-0.5 hover:bg-secondary/30 disabled:opacity-50 transition-colors"
+          title={starred ? 'Remove the star in Gmail' : 'Star this email in Gmail'}
+          className="mt-1 flex-shrink-0 rounded p-1 hover:bg-secondary/30 disabled:opacity-50 transition-colors"
         >
           <Star
-            className={`w-3.5 h-3.5 ${starred ? 'fill-yellow-400 text-yellow-400' : 'text-muted-foreground/40'}`}
+            className={`w-4 h-4 ${starred ? 'fill-yellow-400 text-yellow-400' : 'text-muted-foreground hover:text-foreground'}`}
           />
         </button>
       )}

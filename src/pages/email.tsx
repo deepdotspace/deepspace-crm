@@ -29,9 +29,9 @@ import DOMPurify from 'dompurify'
 import { integration, useAuth, getAuthToken } from 'deepspace'
 import {
   Mail, MailOpen, ExternalLink, RefreshCw, Plug, Unplug, Search, Inbox,
-  ChevronLeft, ChevronRight, Archive, Trash2, Reply, PenSquare, Loader2,
+  ChevronLeft, ChevronRight, Archive, Trash2, Reply, PenSquare, Loader2, Star,
 } from 'lucide-react'
-import { Button } from '../components/ui'
+import { Button, useToast } from '../components/ui'
 import { ComposeEmailDialog } from '../components/ComposeEmailDialog'
 import { useGmailWrite } from '../platform/useGmailWrite'
 
@@ -78,6 +78,13 @@ interface InboxPayload {
 
 const PAGE_SIZE = 25
 
+/** Mailbox filter → the single Gmail label the list view is scoped to. */
+const FILTER_LABEL = {
+  inbox: 'INBOX',
+  starred: 'STARRED',
+  unread: 'UNREAD',
+} as const
+
 async function authHeaders(): Promise<HeadersInit> {
   const token = await getAuthToken()
   return token ? { Authorization: `Bearer ${token}` } : {}
@@ -116,8 +123,15 @@ export default function EmailPage() {
   // estimate, not a count) — same behavior as mail.google.com.
   const [resultSizeEstimate, setResultSizeEstimate] = useState<number | null>(null)
 
-  // Gmail write surface (compose/reply, mark read/unread, archive, trash).
-  const { markRead, markUnread, archive, trash } = useGmailWrite()
+  // Gmail write surface (compose/reply, mark read/unread, star, archive, trash).
+  const { markRead, markUnread, archive, trash, star, unstar } = useGmailWrite()
+  const toast = useToast()
+
+  // Mailbox view filter — maps to Gmail label filtering server-side.
+  // 'starred' exists partly as proof-of-write: star a message, switch to
+  // Starred, and the STARRED label change is visible immediately (and in
+  // Gmail itself). All three are single-label views so labelTotal applies.
+  const [mailboxFilter, setMailboxFilter] = useState<'inbox' | 'starred' | 'unread'>('inbox')
   // Compose dialog state. `null` = closed. `threadId` set = reply.
   const [compose, setCompose] = useState<{
     prefillTo?: string
@@ -186,7 +200,7 @@ export default function EmailPage() {
           params.q = searchQuery.trim()
           params.labelIds = []
         } else {
-          params.labelIds = ['INBOX']
+          params.labelIds = [FILTER_LABEL[mailboxFilter]]
           params.includeLabelTotal = true
         }
         if (pageToken) params.pageToken = pageToken
@@ -244,12 +258,13 @@ export default function EmailPage() {
         setLoadingMessages(false)
       }
     },
-    [refreshStatus, searchQuery],
+    [refreshStatus, searchQuery, mailboxFilter],
   )
 
-  // When the committed search query changes, reset pagination state +
-  // refetch from page 1. We watch a primitive (searchQuery, not the
-  // input) so typing into the box doesn't refetch on every keystroke.
+  // When the committed search query or mailbox filter changes, reset
+  // pagination state + refetch from page 1. We watch primitives
+  // (searchQuery, not the input) so typing into the box doesn't refetch
+  // on every keystroke.
   useEffect(() => {
     if (!status.gmailRead) return
     setTokensVisited([null])
@@ -257,9 +272,9 @@ export default function EmailPage() {
     setNextPageToken(null)
     setResultSizeEstimate(null)
     void fetchPage(null)
-    // fetchPage is stable per-searchQuery via the dep above.
+    // fetchPage is stable per-searchQuery/-filter via the deps above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchQuery, status.gmailRead])
+  }, [searchQuery, mailboxFilter, status.gmailRead])
 
   // Refresh = re-fetch current page, keep history intact.
   const refreshCurrentPage = useCallback(() => {
@@ -332,10 +347,18 @@ export default function EmailPage() {
   // the user's scope (first-time consent), we refresh status so the badge
   // reflects gmailModify.
   const applyResult = useCallback(
-    (res: { success: boolean; error?: string; cancelled?: boolean }, action: string) => {
+    (
+      res: { success: boolean; error?: string; cancelled?: boolean },
+      action: string,
+      successMessage?: string,
+    ) => {
       if (res.success) {
         // A first-time write may have just upgraded the grant to gmail.modify.
         refreshStatus()
+        // Name the mailbox mutation explicitly — the change happened in the
+        // user's real Gmail, not just in this list, and the toast makes that
+        // visible (also to anyone reviewing the gmail.modify write surface).
+        if (successMessage) toast.success(successMessage)
         return true
       }
       // Failed or cancelled — resync the list so the optimistic change is
@@ -347,15 +370,20 @@ export default function EmailPage() {
       refreshCurrentPage()
       return false
     },
-    [refreshStatus, refreshCurrentPage],
+    [refreshStatus, refreshCurrentPage, toast],
   )
 
   const onToggleRead = useCallback(
     async (message: GmailMessage) => {
       const isUnread = message.labelIds?.includes('UNREAD') ?? false
-      // Optimistic relabel.
-      setMessages((prev) =>
-        prev?.map((m) =>
+      // Optimistic relabel. In the Unread view, marking read also removes
+      // the row (it no longer matches the view), mirroring unstar-in-Starred.
+      setMessages((prev) => {
+        if (!prev) return prev
+        if (isUnread && mailboxFilter === 'unread') {
+          return prev.filter((m) => m.id !== message.id)
+        }
+        return prev.map((m) =>
           m.id === message.id
             ? {
                 ...m,
@@ -364,19 +392,54 @@ export default function EmailPage() {
                   : [...(m.labelIds ?? []), 'UNREAD'],
               }
             : m,
-        ) ?? prev,
-      )
+        )
+      })
       const res = isUnread ? await markRead(message.id) : await markUnread(message.id)
-      applyResult(res, isUnread ? 'mark as read' : 'mark as unread')
+      applyResult(
+        res,
+        isUnread ? 'mark as read' : 'mark as unread',
+        isUnread ? 'Marked as read in Gmail' : 'Marked as unread in Gmail',
+      )
     },
-    [markRead, markUnread, applyResult],
+    [markRead, markUnread, applyResult, mailboxFilter],
+  )
+
+  const onToggleStar = useCallback(
+    async (message: GmailMessage) => {
+      const isStarred = message.labelIds?.includes('STARRED') ?? false
+      // Optimistic relabel. In the Starred view, unstarring also removes the
+      // row (it no longer matches the view), mirroring archive-in-inbox.
+      setMessages((prev) => {
+        if (!prev) return prev
+        if (isStarred && mailboxFilter === 'starred') {
+          return prev.filter((m) => m.id !== message.id)
+        }
+        return prev.map((m) =>
+          m.id === message.id
+            ? {
+                ...m,
+                labelIds: isStarred
+                  ? (m.labelIds ?? []).filter((l) => l !== 'STARRED')
+                  : [...(m.labelIds ?? []), 'STARRED'],
+              }
+            : m,
+        )
+      })
+      const res = isStarred ? await unstar(message.id) : await star(message.id)
+      applyResult(
+        res,
+        isStarred ? 'unstar' : 'star',
+        isStarred ? 'Star removed in Gmail' : 'Starred in Gmail',
+      )
+    },
+    [star, unstar, applyResult, mailboxFilter],
   )
 
   const onArchive = useCallback(
     async (message: GmailMessage) => {
       setMessages((prev) => prev?.filter((m) => m.id !== message.id) ?? prev)
       const res = await archive(message.id)
-      applyResult(res, 'archive')
+      applyResult(res, 'archive', 'Archived — removed from your Gmail inbox')
     },
     [archive, applyResult],
   )
@@ -385,7 +448,7 @@ export default function EmailPage() {
     async (message: GmailMessage) => {
       setMessages((prev) => prev?.filter((m) => m.id !== message.id) ?? prev)
       const res = await trash(message.id)
-      applyResult(res, 'move to Trash')
+      applyResult(res, 'move to Trash', 'Moved to Gmail Trash (recoverable for 30 days)')
     },
     [trash, applyResult],
   )
@@ -485,7 +548,7 @@ export default function EmailPage() {
         <Mail className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
         <span>
           Reading uses the <code>gmail.readonly</code> scope. Compose, reply,
-          mark read/unread, archive, and trash use <code>gmail.modify</code>,
+          mark read/unread, star, archive, and trash use <code>gmail.modify</code>,
           requested the first time you take a write action. We never permanently
           delete mail — Trash is recoverable in{' '}
           <a
@@ -532,7 +595,41 @@ export default function EmailPage() {
           default inbox view because Google doesn't return a reliable
           total for arbitrary search queries. */}
       {status.gmailRead && (
-        <div className="flex items-center gap-3 mb-4">
+        <div className="flex items-center gap-3 mb-4 flex-wrap">
+          {/* Mailbox views — Starred doubles as visible proof that the star
+              write landed: star a message, switch here, it's in the list. */}
+          <div className="flex items-center gap-1" role="group" aria-label="Mailbox view">
+            <FilterChip
+              label="Inbox"
+              icon={<Inbox className="w-3.5 h-3.5" />}
+              active={mailboxFilter === 'inbox' && !searchQuery}
+              onClick={() => {
+                setSearchInput('')
+                setSearchQuery('')
+                setMailboxFilter('inbox')
+              }}
+            />
+            <FilterChip
+              label="Starred"
+              icon={<Star className="w-3.5 h-3.5" />}
+              active={mailboxFilter === 'starred' && !searchQuery}
+              onClick={() => {
+                setSearchInput('')
+                setSearchQuery('')
+                setMailboxFilter('starred')
+              }}
+            />
+            <FilterChip
+              label="Unread"
+              icon={<Mail className="w-3.5 h-3.5" />}
+              active={mailboxFilter === 'unread' && !searchQuery}
+              onClick={() => {
+                setSearchInput('')
+                setSearchQuery('')
+                setMailboxFilter('unread')
+              }}
+            />
+          </div>
           <form
             className="relative max-w-sm flex-1"
             onSubmit={(e) => {
@@ -590,7 +687,13 @@ export default function EmailPage() {
             <div className="text-center py-16">
               <Mail className="w-10 h-10 text-muted-foreground/20 mx-auto mb-3" />
               <p className="text-sm text-muted-foreground">
-                {searchQuery ? `No messages match "${searchQuery}".` : 'Inbox is empty.'}
+                {searchQuery
+                  ? `No messages match "${searchQuery}".`
+                  : mailboxFilter === 'starred'
+                    ? 'No starred messages — click the star on any message to flag it in Gmail.'
+                    : mailboxFilter === 'unread'
+                      ? 'No unread messages.'
+                      : 'Inbox is empty.'}
               </p>
             </div>
           ) : (
@@ -601,6 +704,7 @@ export default function EmailPage() {
                   message={m}
                   onReply={onReply}
                   onToggleRead={onToggleRead}
+                  onToggleStar={onToggleStar}
                   onArchive={onArchive}
                   onTrash={onTrash}
                 />
@@ -629,6 +733,35 @@ export default function EmailPage() {
         }}
       />
     </div>
+  )
+}
+
+/** Mailbox-view pill (Inbox / Starred / Unread). */
+function FilterChip({
+  label,
+  icon,
+  active,
+  onClick,
+}: {
+  label: string
+  icon: React.ReactNode
+  active: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium border transition-colors ${
+        active
+          ? 'bg-primary/10 border-primary/40 text-primary'
+          : 'bg-secondary/30 border-border text-muted-foreground hover:text-foreground hover:bg-secondary/50'
+      }`}
+    >
+      {icon}
+      {label}
+    </button>
   )
 }
 
@@ -666,12 +799,14 @@ function MessageRow({
   message,
   onReply,
   onToggleRead,
+  onToggleStar,
   onArchive,
   onTrash,
 }: {
   message: GmailMessage
   onReply: (m: GmailMessage) => void
   onToggleRead: (m: GmailMessage) => void | Promise<void>
+  onToggleStar: (m: GmailMessage) => void | Promise<void>
   onArchive: (m: GmailMessage) => void | Promise<void>
   onTrash: (m: GmailMessage) => void | Promise<void>
 }) {
@@ -680,6 +815,7 @@ function MessageRow({
   // double-submits (e.g. two archive clicks racing).
   const [busy, setBusy] = useState(false)
   const isUnread = message.labelIds?.includes('UNREAD') ?? false
+  const isStarred = message.labelIds?.includes('STARRED') ?? false
   // Lazily-fetched full thread (all messages in this conversation).
   // Single-message rendering is the wrong UX — clicking a row in
   // Gmail's UI opens the entire thread in chronological order, with
@@ -771,37 +907,46 @@ function MessageRow({
             )}
           </button>
 
-          {/* Action toolbar — revealed on hover; always visible while busy. */}
-          <div
-            className={`flex items-center gap-0.5 flex-shrink-0 transition-opacity ${busy ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100'}`}
-          >
+          {/* Action toolbar — ALWAYS visible (not hover-revealed): these are
+              the app's Gmail write actions (gmail.modify) and hiding them
+              behind a hover made them undiscoverable. */}
+          <div className="flex items-center gap-0.5 flex-shrink-0">
+            <RowAction
+              label={isStarred ? 'Unstar (removes the star in Gmail)' : 'Star (adds a star in Gmail)'}
+              disabled={busy}
+              onClick={() => run(() => onToggleStar(message))}
+            >
+              <Star
+                className={`w-4 h-4 ${isStarred ? 'fill-yellow-400 text-yellow-400' : ''}`}
+              />
+            </RowAction>
             <RowAction
               label="Reply"
               disabled={busy}
               onClick={() => onReply(message)}
             >
-              <Reply className="w-3.5 h-3.5" />
+              <Reply className="w-4 h-4" />
             </RowAction>
             <RowAction
               label={isUnread ? 'Mark as read' : 'Mark as unread'}
               disabled={busy}
               onClick={() => run(() => onToggleRead(message))}
             >
-              {isUnread ? <MailOpen className="w-3.5 h-3.5" /> : <Mail className="w-3.5 h-3.5" />}
+              {isUnread ? <MailOpen className="w-4 h-4" /> : <Mail className="w-4 h-4" />}
             </RowAction>
             <RowAction
               label="Archive"
               disabled={busy}
               onClick={() => run(() => onArchive(message))}
             >
-              <Archive className="w-3.5 h-3.5" />
+              <Archive className="w-4 h-4" />
             </RowAction>
             <RowAction
               label="Move to Trash"
               disabled={busy}
               onClick={() => run(() => onTrash(message))}
             >
-              {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+              {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
             </RowAction>
           </div>
         </div>
