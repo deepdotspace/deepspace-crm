@@ -239,7 +239,10 @@ export function useCalendarWrite() {
 
   const deleteEvent = useCallback(
     (eventId: string, calendarId = 'primary'): Promise<GoogleWriteResult> =>
-      run('google/calendar-delete-event', { eventId, calendarId }),
+      // sendUpdates is opt-in on the server (existing callers must not start
+      // emailing attendees), but a CRM meeting cancellation is exactly the
+      // case where the invitee must hear about it — opt in explicitly.
+      run('google/calendar-delete-event', { eventId, calendarId, sendUpdates: 'all' }),
     [run],
   )
 
