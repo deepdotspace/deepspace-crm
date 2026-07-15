@@ -1,5 +1,5 @@
 /**
- * EmailListWidget — read-only Gmail list with sane defaults.
+ * EmailListWidget — Gmail list with optional mailbox write actions.
  *
  * Used on Contact detail, Deal detail, Dashboard recent-emails, and
  * any other surface that wants "show recent emails matching this
@@ -10,13 +10,20 @@
  * row links out to the Email tab with the message id, where the
  * thread view lives. We deliberately do NOT inline-render bodies
  * here to keep the widget compact.
+ *
+ * With `enableActions`, each row carries the Gmail write toolbar
+ * (gmail.modify): star/unstar, mark read/unread, archive, trash.
+ * The buttons are ALWAYS visible — hover-revealed actions proved
+ * undiscoverable. Opt-in so read-only surfaces (dashboard) stay
+ * link-only; enabled on contact/deal detail where acting on a
+ * contact's mail is a core CRM workflow.
  */
 
 import { useCallback, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Inbox, Mail, ExternalLink, Star } from 'lucide-react'
+import { Inbox, Mail, MailOpen, ExternalLink, Star, Archive, Trash2 } from 'lucide-react'
 import { useGmail, type GmailQuery, type GmailMessage } from '../platform/useGmail'
-import { useGmailWrite } from '../platform/useGmailWrite'
+import { useGmailWrite, type GmailWriteResult } from '../platform/useGmailWrite'
 import { useToast } from './ui'
 
 interface EmailListWidgetProps {
@@ -33,11 +40,11 @@ interface EmailListWidgetProps {
   /** Optional click handler on a row, otherwise opens in Gmail. */
   onMessageClick?: (m: GmailMessage) => void
   /**
-   * Show a Star toggle on each row (gmail.modify — adds/removes the STARRED
-   * label). Opt-in so read-only surfaces (dashboard) stay link-only; enabled
-   * on contact/deal detail where flagging a contact's mail is a CRM action.
+   * Show the Gmail write toolbar on each row (gmail.modify): star/unstar,
+   * mark read/unread, archive, and trash — each writes to the user's real
+   * mailbox and confirms via toast.
    */
-  enableStar?: boolean
+  enableActions?: boolean
 }
 
 export function EmailListWidget({
@@ -47,42 +54,101 @@ export function EmailListWidget({
   skip = false,
   compact = false,
   onMessageClick,
-  enableStar = false,
+  enableActions = false,
 }: EmailListWidgetProps) {
   const { messages, loading, error, oauthAuthUrl } = useGmail(query, !skip)
-  const { star, unstar } = useGmailWrite()
+  const { star, unstar, markRead, markUnread, archive, trash } = useGmailWrite()
   const toast = useToast()
-  // Optimistic per-message star state layered over the fetched labelIds, plus
-  // an in-flight set to disable the button mid-request. Reverts on failure.
+  // Optimistic per-message state layered over the fetched labelIds (star /
+  // unread), rows hidden after archive/trash, and an in-flight set that
+  // disables a row's toolbar mid-request. All revert on failure.
   const [starOverride, setStarOverride] = useState<Record<string, boolean>>({})
-  const [starBusy, setStarBusy] = useState<Record<string, boolean>>({})
+  const [unreadOverride, setUnreadOverride] = useState<Record<string, boolean>>({})
+  const [removed, setRemoved] = useState<Record<string, boolean>>({})
+  const [busy, setBusy] = useState<Record<string, boolean>>({})
+
+  // Shared action wrapper: optimistic apply → await the write → toast the
+  // real mailbox mutation, or revert + explain. `cancelled` means the user
+  // dismissed the consent popup, which isn't an error worth a toast.
+  const runAction = useCallback(
+    async (
+      id: string,
+      apply: () => void,
+      revert: () => void,
+      write: () => Promise<GmailWriteResult>,
+      okToast: string,
+      failToast: string,
+    ) => {
+      setBusy((b) => ({ ...b, [id]: true }))
+      apply()
+      const res = await write()
+      if (res.success) {
+        toast.success(okToast)
+      } else {
+        // A silent revert looks like the click did nothing — surface why.
+        revert()
+        if (!res.cancelled) toast.error(failToast, res.error ?? 'Gmail write failed')
+      }
+      setBusy((b) => ({ ...b, [id]: false }))
+    },
+    [toast],
+  )
 
   const toggleStar = useCallback(
-    async (m: GmailMessage, currentlyStarred: boolean) => {
+    (m: GmailMessage, currentlyStarred: boolean) => {
       const next = !currentlyStarred
-      setStarBusy((b) => ({ ...b, [m.id]: true }))
-      setStarOverride((o) => ({ ...o, [m.id]: next }))
-      const res = next ? await star(m.id) : await unstar(m.id)
-      if (res.success) {
-        // Name the real mailbox mutation — the STARRED label just changed in
-        // the user's Gmail, and the toast makes that observable.
-        toast.success(next ? 'Starred in Gmail' : 'Star removed in Gmail')
-      }
-      if (!res.success) {
-        // Roll back the optimistic toggle and surface why — a silent revert
-        // looks like the click did nothing. `cancelled` means the user
-        // dismissed the consent popup, which isn't an error worth a toast.
-        setStarOverride((o) => ({ ...o, [m.id]: currentlyStarred }))
-        if (!res.cancelled) {
-          toast.error(
-            next ? "Couldn't star email" : "Couldn't unstar email",
-            res.error ?? 'Gmail write failed',
-          )
-        }
-      }
-      setStarBusy((b) => ({ ...b, [m.id]: false }))
+      return runAction(
+        m.id,
+        () => setStarOverride((o) => ({ ...o, [m.id]: next })),
+        () => setStarOverride((o) => ({ ...o, [m.id]: currentlyStarred })),
+        () => (next ? star(m.id) : unstar(m.id)),
+        next ? 'Starred in Gmail' : 'Star removed in Gmail',
+        next ? "Couldn't star email" : "Couldn't unstar email",
+      )
     },
-    [star, unstar, toast],
+    [runAction, star, unstar],
+  )
+
+  const toggleRead = useCallback(
+    (m: GmailMessage, currentlyUnread: boolean) => {
+      return runAction(
+        m.id,
+        () => setUnreadOverride((o) => ({ ...o, [m.id]: !currentlyUnread })),
+        () => setUnreadOverride((o) => ({ ...o, [m.id]: currentlyUnread })),
+        () => (currentlyUnread ? markRead(m.id) : markUnread(m.id)),
+        currentlyUnread ? 'Marked as read in Gmail' : 'Marked as unread in Gmail',
+        "Couldn't update read state",
+      )
+    },
+    [runAction, markRead, markUnread],
+  )
+
+  const archiveMessage = useCallback(
+    (m: GmailMessage) => {
+      return runAction(
+        m.id,
+        () => setRemoved((r) => ({ ...r, [m.id]: true })),
+        () => setRemoved((r) => ({ ...r, [m.id]: false })),
+        () => archive(m.id),
+        'Archived — removed from your Gmail inbox',
+        "Couldn't archive email",
+      )
+    },
+    [runAction, archive],
+  )
+
+  const trashMessage = useCallback(
+    (m: GmailMessage) => {
+      return runAction(
+        m.id,
+        () => setRemoved((r) => ({ ...r, [m.id]: true })),
+        () => setRemoved((r) => ({ ...r, [m.id]: false })),
+        () => trash(m.id),
+        'Moved to Gmail Trash',
+        "Couldn't trash email",
+      )
+    },
+    [runAction, trash],
   )
 
   if (skip) return null
@@ -124,36 +190,67 @@ export function EmailListWidget({
     )
   }
 
+  const visible = messages.filter((m) => !removed[m.id])
+
   return (
-    <Section heading={heading}>
+    <Section heading={heading} actionsHint={enableActions}>
       <div className="divide-y divide-border/50 rounded-lg border border-border bg-card overflow-hidden">
-        {messages.map((m) => {
+        {visible.map((m) => {
           const starred = starOverride[m.id] ?? (m.labelIds?.includes('STARRED') ?? false)
+          const unread = unreadOverride[m.id] ?? (m.labelIds?.includes('UNREAD') ?? false)
           return (
             <EmailRow
               key={m.id}
               message={m}
               compact={compact}
               onClick={onMessageClick}
-              enableStar={enableStar}
+              enableActions={enableActions}
               starred={starred}
-              starBusy={!!starBusy[m.id]}
+              unread={unread}
+              busy={!!busy[m.id]}
               onToggleStar={() => toggleStar(m, starred)}
+              onToggleRead={() => toggleRead(m, unread)}
+              onArchive={() => archiveMessage(m)}
+              onTrash={() => trashMessage(m)}
             />
           )
         })}
+        {visible.length === 0 && (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground px-3 py-3">
+            <Inbox className="w-3.5 h-3.5" />
+            {emptyText}
+          </div>
+        )}
       </div>
     </Section>
   )
 }
 
-function Section({ heading, children }: { heading?: string; children: React.ReactNode }) {
+function Section({
+  heading,
+  actionsHint = false,
+  children,
+}: {
+  heading?: string
+  /** Note under the heading that row actions write to the user's Gmail. */
+  actionsHint?: boolean
+  children: React.ReactNode
+}) {
   return (
     <div>
-      {heading && (
-        <div className="flex items-center gap-1.5 mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wide">
-          <Mail className="w-3 h-3" />
-          {heading}
+      {(heading || actionsHint) && (
+        <div className="mb-2">
+          {heading && (
+            <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              <Mail className="w-3 h-3" />
+              {heading}
+            </div>
+          )}
+          {actionsHint && (
+            <p className={`text-[11px] text-muted-foreground ${heading ? 'mt-1' : ''}`}>
+              Live from Gmail — star, read/unread, archive, and trash act on your real mailbox.
+            </p>
+          )}
         </div>
       )}
       {children}
@@ -165,18 +262,26 @@ function EmailRow({
   message,
   compact,
   onClick,
-  enableStar = false,
+  enableActions = false,
   starred = false,
-  starBusy = false,
+  unread = false,
+  busy = false,
   onToggleStar,
+  onToggleRead,
+  onArchive,
+  onTrash,
 }: {
   message: GmailMessage
   compact: boolean
   onClick?: (m: GmailMessage) => void
-  enableStar?: boolean
+  enableActions?: boolean
   starred?: boolean
-  starBusy?: boolean
+  unread?: boolean
+  busy?: boolean
   onToggleStar?: () => void
+  onToggleRead?: () => void
+  onArchive?: () => void
+  onTrash?: () => void
 }) {
   const headers = message.payload?.headers ?? []
   const get = (n: string) => headers.find((h) => h.name?.toLowerCase() === n.toLowerCase())?.value
@@ -184,7 +289,7 @@ function EmailRow({
   const subjectRaw = get('Subject') ?? '(no subject)'
   const from = parseFrom(fromRaw)
   const dateStr = formatDate(message.internalDate)
-  const isUnread = message.labelIds?.includes('UNREAD') ?? false
+  const isUnread = unread
 
   const threadUrl = `https://mail.google.com/mail/u/0/#inbox/${message.threadId ?? message.id}`
   const handleClick = onClick
@@ -225,28 +330,80 @@ function EmailRow({
           </p>
         )}
       </div>
-      {enableStar && (
-        <button
-          type="button"
-          // Star is a gmail.modify action; keep the row's outbound link from
-          // firing when the star is clicked.
-          onClick={(e) => {
-            e.preventDefault()
-            e.stopPropagation()
-            onToggleStar?.()
-          }}
-          disabled={starBusy}
-          aria-pressed={starred}
-          title={starred ? 'Remove the star in Gmail' : 'Star this email in Gmail'}
-          className="mt-1 flex-shrink-0 rounded p-1 hover:bg-secondary/30 disabled:opacity-50 transition-colors"
-        >
-          <Star
-            className={`w-4 h-4 ${starred ? 'fill-yellow-400 text-yellow-400' : 'text-muted-foreground hover:text-foreground'}`}
-          />
-        </button>
+      {enableActions && (
+        // Gmail write toolbar (gmail.modify) — always visible, never
+        // hover-revealed. Each button stops propagation so acting on a
+        // message never fires the row's outbound link.
+        <div className="flex items-center gap-0.5 flex-shrink-0 mt-0.5">
+          <WidgetAction
+            label={starred ? 'Unstar (removes the star in Gmail)' : 'Star this email in Gmail'}
+            pressed={starred}
+            disabled={busy}
+            onClick={onToggleStar}
+          >
+            <Star
+              className={`w-4 h-4 ${starred ? 'fill-yellow-400 text-yellow-400' : ''}`}
+            />
+          </WidgetAction>
+          <WidgetAction
+            label={isUnread ? 'Mark as read in Gmail' : 'Mark as unread in Gmail'}
+            disabled={busy}
+            onClick={onToggleRead}
+          >
+            {isUnread ? <MailOpen className="w-4 h-4" /> : <Mail className="w-4 h-4" />}
+          </WidgetAction>
+          <WidgetAction
+            label="Archive (removes from your Gmail inbox)"
+            disabled={busy}
+            onClick={onArchive}
+          >
+            <Archive className="w-4 h-4" />
+          </WidgetAction>
+          <WidgetAction
+            label="Move to Gmail Trash"
+            disabled={busy}
+            onClick={onTrash}
+          >
+            <Trash2 className="w-4 h-4" />
+          </WidgetAction>
+        </div>
       )}
       <ExternalLink className="w-3 h-3 text-muted-foreground/40 mt-1.5 flex-shrink-0" />
     </a>
+  )
+}
+
+// Compact icon button for the widget's Gmail write toolbar. Lives inside an
+// anchor row, so it must preventDefault as well as stopPropagation.
+function WidgetAction({
+  label,
+  pressed,
+  disabled,
+  onClick,
+  children,
+}: {
+  label: string
+  pressed?: boolean
+  disabled?: boolean
+  onClick?: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      aria-pressed={pressed}
+      disabled={disabled}
+      onClick={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        onClick?.()
+      }}
+      className="inline-flex items-center justify-center rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+    >
+      {children}
+    </button>
   )
 }
 

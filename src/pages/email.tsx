@@ -765,15 +765,22 @@ function FilterChip({
   )
 }
 
-// Small icon button used in the message-row action toolbar. Stops click
-// propagation so acting on a message never toggles its thread open.
+// Labeled button used in the message-row action toolbar. The text label is
+// deliberately visible (not tooltip-only): these are the app's Gmail write
+// actions and icon-only buttons proved too easy to overlook. The label
+// collapses to icon-only below md to keep rows usable on small screens.
+// Stops click propagation so acting on a message never toggles its thread.
 function RowAction({
   label,
+  text,
   onClick,
   disabled,
   children,
 }: {
+  /** Full action description (tooltip + aria-label). */
   label: string
+  /** Short visible text, e.g. "Archive". */
+  text: string
   onClick: () => void
   disabled?: boolean
   children: React.ReactNode
@@ -788,9 +795,10 @@ function RowAction({
         e.stopPropagation()
         onClick()
       }}
-      className="inline-flex items-center justify-center rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+      className="inline-flex items-center gap-1 rounded-md border border-border/60 px-1.5 py-1 text-muted-foreground hover:bg-muted hover:text-foreground hover:border-border disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
     >
       {children}
+      <span className="hidden md:inline text-[11px] font-medium">{text}</span>
     </button>
   )
 }
@@ -910,43 +918,48 @@ function MessageRow({
           {/* Action toolbar — ALWAYS visible (not hover-revealed): these are
               the app's Gmail write actions (gmail.modify) and hiding them
               behind a hover made them undiscoverable. */}
-          <div className="flex items-center gap-0.5 flex-shrink-0">
+          <div className="flex items-center gap-1 flex-shrink-0">
             <RowAction
               label={isStarred ? 'Unstar (removes the star in Gmail)' : 'Star (adds a star in Gmail)'}
+              text={isStarred ? 'Unstar' : 'Star'}
               disabled={busy}
               onClick={() => run(() => onToggleStar(message))}
             >
               <Star
-                className={`w-4 h-4 ${isStarred ? 'fill-yellow-400 text-yellow-400' : ''}`}
+                className={`w-3.5 h-3.5 ${isStarred ? 'fill-yellow-400 text-yellow-400' : ''}`}
               />
             </RowAction>
             <RowAction
               label="Reply"
+              text="Reply"
               disabled={busy}
               onClick={() => onReply(message)}
             >
-              <Reply className="w-4 h-4" />
+              <Reply className="w-3.5 h-3.5" />
             </RowAction>
             <RowAction
-              label={isUnread ? 'Mark as read' : 'Mark as unread'}
+              label={isUnread ? 'Mark as read in Gmail' : 'Mark as unread in Gmail'}
+              text={isUnread ? 'Read' : 'Unread'}
               disabled={busy}
               onClick={() => run(() => onToggleRead(message))}
             >
-              {isUnread ? <MailOpen className="w-4 h-4" /> : <Mail className="w-4 h-4" />}
+              {isUnread ? <MailOpen className="w-3.5 h-3.5" /> : <Mail className="w-3.5 h-3.5" />}
             </RowAction>
             <RowAction
-              label="Archive"
+              label="Archive (removes from your Gmail inbox)"
+              text="Archive"
               disabled={busy}
               onClick={() => run(() => onArchive(message))}
             >
-              <Archive className="w-4 h-4" />
+              <Archive className="w-3.5 h-3.5" />
             </RowAction>
             <RowAction
-              label="Move to Trash"
+              label="Move to Gmail Trash"
+              text="Trash"
               disabled={busy}
               onClick={() => run(() => onTrash(message))}
             >
-              {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+              {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
             </RowAction>
           </div>
         </div>

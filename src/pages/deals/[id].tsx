@@ -354,7 +354,7 @@ export default function DealDetailPage() {
                 <EmailListWidget
                   query={{ q, labelIds: [], maxResults: 10, format: 'metadata' }}
                   emptyText="No emails with this deal's contacts."
-                  enableStar
+                  enableActions
                 />
               </div>
             )

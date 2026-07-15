@@ -252,10 +252,11 @@ export default function ContactDetailPage() {
             )}
           </div>
 
-          {/* Emails — Gmail-readonly: messages between this contact's
-              email and the user, across all labels (sent + received +
-              archive). Only renders when the contact has an email
-              address to query against. */}
+          {/* Emails — messages between this contact's email and the user,
+              across all labels (sent + received + archive), read via
+              gmail.readonly. Row actions (star, read/unread, archive,
+              trash) write back via gmail.modify. Only renders when the
+              contact has an email address to query against. */}
           {person.email && (
             <div className="bg-card border border-border rounded-xl p-5">
               <div className="flex items-center justify-between mb-4">
@@ -273,7 +274,7 @@ export default function ContactDetailPage() {
                   format: 'metadata',
                 }}
                 emptyText={`No emails with ${person.email}.`}
-                enableStar
+                enableActions
               />
             </div>
           )}
