@@ -231,7 +231,11 @@ export function useCalendarWrite() {
       if (params.description !== undefined) body.description = params.description
       if (params.location !== undefined) body.location = params.location
       if (params.attendees?.length) body.attendees = params.attendees
-      // Server defaults sendUpdates to 'all' so attendees hear about the change.
+      // sendUpdates is opt-in on the server (silent by default, matching
+      // Google and the create/delete endpoints). A CRM reschedule is exactly
+      // the case where attendees must hear about it — opt in explicitly,
+      // same as the cancel path below.
+      body.sendUpdates = 'all'
       return run('google/calendar-update-event', body)
     },
     [run],
